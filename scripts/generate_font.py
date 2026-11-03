@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Generate an LVGL v9 compatible C font for CJK, Korean Hangul, and extended symbols.
+script to;
+generate an LVGL v9 compatible C font for CJK, Korean Hangul, and extended symbols.
 Extracts glyphs from NotoSansCJK-VF.ttc.
 """
 
