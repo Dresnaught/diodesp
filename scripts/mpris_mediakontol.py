@@ -6,6 +6,7 @@ import atexit
 import io
 import urllib.parse
 import urllib.request
+import unicodedata
 from PIL import Image
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
@@ -16,6 +17,29 @@ baud = 115200
 ser = None
 ser_lock = threading.Lock()
 last_art_url = None
+
+def clean_mpris_text(text):
+    if not text:
+        return ""
+    # Normalize common typographic punctuation that aren't in ASCII
+    replacements = {
+        '\u2018': "'", '\u2019': "'", '\u201a': "'", '\u201b': "'",
+        '\u201c': '"', '\u201d': '"', '\u201e': '"', '\u201f': '"',
+        '\u2013': "-", '\u2014': "-", '\u2015': "-",
+        '\u2026': "...",
+        '\u00a0': " ",
+        '〜': "~",
+        '・': "·",
+        '【': "[", '】': "]",
+        '（': "(", '）': ")",
+        '「': '"', '」': '"',
+        '『': '"', '』': '"',
+        '［': '[', '］': ']',
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    text = unicodedata.normalize('NFKC', text)
+    return text.strip()
 
 try:
     ser = serial.Serial(SERIAL_COM, baud, timeout=0.3)
@@ -164,6 +188,9 @@ def listen():
                     case "previous":
                         print("recieve previous from MCU: gonna go back")
                         send_cum(2)
+                    case "QUERY" | "PING":
+                        print("<- MCU: queried playing status -> re-syncing full state")
+                        sync_initial_mpris()
                     case _:
                         print(f"unknown mcu line: {line}")
             else:
@@ -177,13 +204,21 @@ threading.Thread(target=listen, daemon=True).start()
 had_player = False
 
 # Periodic progress bar updater (every 1 second)
+missed_player_count = 0
+
 def progress_loop():
-    global had_player
+    global had_player, missed_player_count, last_art_url
     while True:
         try:
             get = get_mpris()
             if get:
+                if not had_player:
+                    print("mpris player detected, syncing track...")
+                    had_player = True
+                    sync_initial_mpris()
                 had_player = True
+                missed_player_count = 0
+
                 props = dbus.Interface(get, 'org.freedesktop.DBus.Properties')
                 status = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus'))
                 if status == 'Playing':
@@ -196,14 +231,18 @@ def progress_loop():
                     send_to_mcu(f"POS:{cur_sec}:{total_sec}\n")
             else:
                 if had_player:
-                    had_player = False
-                    print("media player closed, resetting MCU to waiting for MPRIS...")
-                    last_art_url = None
-                    send_to_mcu("TITLE:Waiting for MPRIS...\n")
-                    send_to_mcu("ARTIST:No active media player\n")
-                    send_to_mcu("STATUS:Idle\n")
-                    send_to_mcu("POS:0:0\n")
-                    send_to_mcu("IMG:CLEAR\n")
+                    missed_player_count += 1
+                    # Require 4 consecutive failures before assuming player closed
+                    if missed_player_count >= 4:
+                        had_player = False
+                        missed_player_count = 0
+                        print("media player closed, resetting MCU to waiting for MPRIS...")
+                        last_art_url = None
+                        send_to_mcu("TITLE:Waiting for MPRIS...\n")
+                        send_to_mcu("ARTIST:No active media player\n")
+                        send_to_mcu("STATUS:Idle\n")
+                        send_to_mcu("POS:0:0\n")
+                        send_to_mcu("IMG:CLEAR\n")
         except Exception:
             pass
         time.sleep(1.0)
@@ -241,10 +280,10 @@ def debug_cli():
                 custom_txt = cmd[2:].strip()
                 if " - " in custom_txt:
                     parts = custom_txt.split(" - ", 1)
-                    send_to_mcu(f"TITLE:{parts[0]}\n")
-                    send_to_mcu(f"ARTIST:{parts[1]}\n")
+                    send_to_mcu(f"TITLE:{clean_mpris_text(parts[0])}\n")
+                    send_to_mcu(f"ARTIST:{clean_mpris_text(parts[1])}\n")
                 else:
-                    send_to_mcu(f"TITLE:{custom_txt}\n")
+                    send_to_mcu(f"TITLE:{clean_mpris_text(custom_txt)}\n")
                     send_to_mcu("ARTIST:Unknown Artist\n")
             elif cmd.startswith('pos '):
                 parts = cmd[4:].strip().split()
@@ -291,9 +330,12 @@ def sync_initial_mpris():
         metadata = props.Get('org.mpris.MediaPlayer2.Player', 'Metadata')
         status = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus'))
 
-        titit = str(metadata.get('xesam:title', 'Waiting for MPRIS...'))
+        raw_title = str(metadata.get('xesam:title', 'Waiting for MPRIS...'))
         artists = metadata.get('xesam:artist', ['Unknown Artist'])
-        artist = str(artists[0] if (isinstance(artists, (list, tuple)) and len(artists) > 0) else artists)
+        raw_artist = str(artists[0] if (isinstance(artists, (list, tuple)) and len(artists) > 0) else artists)
+
+        titit = clean_mpris_text(raw_title)
+        artist = clean_mpris_text(raw_artist)
 
         pos_us = int(props.Get('org.mpris.MediaPlayer2.Player', 'Position'))
         len_us = int(metadata.get('mpris:length', 0))
@@ -320,9 +362,12 @@ def on_properties_changed(interface, changed_properties, invalidated_properties,
     if 'Metadata' in changed_properties:
         had_player = True
         metadata = changed_properties['Metadata']
-        titit = str(metadata.get('xesam:title', 'Waiting for MPRIS...'))
+        raw_title = str(metadata.get('xesam:title', 'Waiting for MPRIS...'))
         artists = metadata.get('xesam:artist', ['Unknown Artist'])
-        artist = str(artists[0] if (isinstance(artists, (list, tuple)) and len(artists) > 0) else artists)
+        raw_artist = str(artists[0] if (isinstance(artists, (list, tuple)) and len(artists) > 0) else artists)
+
+        titit = clean_mpris_text(raw_title)
+        artist = clean_mpris_text(raw_artist)
 
         send_to_mcu(f"TITLE:{titit}\n")
         send_to_mcu(f"ARTIST:{artist}\n")

@@ -15,6 +15,7 @@
 #include "lvgl.h"
 #include "include/lovyan_config.h"
 #include "include/theme.h"
+#include "include/font_cjk_kr.h"
 
 // Hardware navigation buttons
 #define PSPL GPIO_NUM_4  // OK / Play-Pause
@@ -129,6 +130,20 @@ static rx_state_t rx_state = RX_STATE_TEXT;
 static size_t expected_img_bytes = 0;
 static size_t img_bytes_received = 0;
 
+// Font instances with CJK and Korean fallback
+#if CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_14_CJK
+LV_FONT_DECLARE(lv_font_source_han_sans_sc_14_cjk);
+static lv_font_t font_cjk;
+#endif
+
+static lv_font_t font_title;
+static lv_font_t font_sub;
+
+// Communication watchdog / keep-alive query
+static uint32_t last_rx_time = 0;
+static bool host_alive = false;
+static bool query_sent = false;
+
 // Focus style and hint visibility
 static lv_style_t style_focus;
 static bool hint_visible = true;
@@ -218,6 +233,8 @@ void ui_music_reset_default(void) {
     rx_state = RX_STATE_TEXT;
     expected_img_bytes = 0;
     img_bytes_received = 0;
+    host_alive = false;
+    query_sent = false;
     ui_music_clear_image();
 
     if (label_title) {
@@ -516,7 +533,7 @@ static void create_music_page(lv_obj_t *parent) {
     // Title and Artist
     label_title = lv_label_create(page);
     lv_label_set_text(label_title, "Waiting for MPRIS...");
-    lv_obj_set_style_text_font(label_title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(label_title, &font_title, 0);
     lv_obj_set_style_text_color(label_title, theme.text_title, 0);
     lv_obj_set_pos(label_title, 168, 50);
     lv_obj_set_width(label_title, 290);
@@ -524,7 +541,7 @@ static void create_music_page(lv_obj_t *parent) {
 
     label_artist = lv_label_create(page);
     lv_label_set_text(label_artist, "Python script not initiated");
-    lv_obj_set_style_text_font(label_artist, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(label_artist, &font_sub, 0);
     lv_obj_set_style_text_color(label_artist, theme.text_muted, 0);
     lv_obj_set_pos(label_artist, 168, 86);
     lv_obj_set_width(label_artist, 290);
@@ -543,7 +560,7 @@ static void create_music_page(lv_obj_t *parent) {
     // Elapsed / Total Time
     label_time = lv_label_create(page);
     lv_label_set_text(label_time, "00:00 / 00:00");
-    lv_obj_set_style_text_font(label_time, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(label_time, &font_sub, 0);
     lv_obj_set_style_text_color(label_time, theme.text_muted, 0);
     lv_obj_set_pos(label_time, 168, 138);
 
@@ -588,7 +605,7 @@ static void create_music_page(lv_obj_t *parent) {
     // Auto-hiding navigation hint
     hint_label = lv_label_create(page);
     lv_label_set_text(hint_label, "PREV: <   OK: Select   NEXT: >");
-    lv_obj_set_style_text_font(hint_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(hint_label, &font_sub, 0);
     lv_obj_set_style_text_color(hint_label, theme.text_dim, 0);
     lv_obj_set_align(hint_label, LV_ALIGN_BOTTOM_MID);
     lv_obj_set_style_pad_bottom(hint_label, 10, 0);
@@ -747,6 +764,10 @@ static void rx_callback(int itf, cdcacm_event_t *event) {
     esp_err_t ret = tinyusb_cdcacm_read(itf, cdc_buffer, CDC_BUF_SIZE, &rx_size);
     if (ret != ESP_OK || rx_size == 0) return;
 
+    last_rx_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    host_alive = true;
+    query_sent = false;
+
     size_t i = 0;
     while (i < rx_size) {
         if (rx_state == RX_STATE_IMAGE) {
@@ -790,14 +811,8 @@ static void line_state_changed_callback(int itf, cdcacm_event_t *event) {
     bool rts = event->line_state_changed_data.rts;
     ESP_LOGI(DTAG, "CDC line state: DTR=%d, RTS=%d", dtr, rts);
 
-    if (lvgl_lock(50)) {
-        if (dtr) {
-            ui_music_set_connected(true);
-        } else {
-            ui_music_reset_default();
-        }
-        lvgl_unlock();
-    }
+    // Query host status instead of immediately wiping UI on transient DTR drops
+    send_cdc_cmd("QUERY\n");
 }
 
 static void usb_event_callback(tinyusb_event_t *event, void *arg) {
@@ -840,6 +855,23 @@ static void button_task(void *pvParameters) {
         if (!menu_is_open && hint_visible && (now - last_input_time >= 4000)) {
             if (lvgl_lock(50)) {
                 set_hint_visible(false);
+                lvgl_unlock();
+            }
+        }
+
+        // Query the host if no serial data has arrived for 4 seconds
+        if (host_alive && !query_sent && (now - last_rx_time >= 4000)) {
+            query_sent = true;
+            send_cdc_cmd("QUERY\n");
+        }
+
+        // If host still has not answered after 8 seconds, reset UI to default
+        if (host_alive && (now - last_rx_time >= 8000)) {
+            host_alive = false;
+            query_sent = false;
+            ESP_LOGW(DTAG, "Host query timed out, resetting UI to default");
+            if (lvgl_lock(50)) {
+                ui_music_reset_default();
                 lvgl_unlock();
             }
         }
@@ -925,6 +957,19 @@ static void button_task(void *pvParameters) {
 }
 
 void render(void *pvParameters) {
+    font_title = lv_font_montserrat_24;
+    font_sub = lv_font_montserrat_14;
+
+#if CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_14_CJK
+    font_cjk = lv_font_source_han_sans_sc_14_cjk;
+    font_cjk.fallback = &font_cjk_kr_14;
+    font_title.fallback = &font_cjk;
+    font_sub.fallback = &font_cjk;
+#else
+    font_title.fallback = &font_cjk_kr_14;
+    font_sub.fallback = &font_cjk_kr_14;
+#endif
+
     lv_style_init(&style_focus);
     lv_style_set_outline_width(&style_focus, 2);
     lv_style_set_outline_color(&style_focus, theme.accent_primary);
