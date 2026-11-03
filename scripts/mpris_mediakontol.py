@@ -2,10 +2,11 @@ import dbus
 import serial
 import threading
 import time
+import atexit
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
-# ur UeSBe or mcu bro.
+# ur UeSBe serial MCU (Native USB / JTAG port on ESP32-S3)
 SERIAL_COM = '/dev/ttyACM0'
 baud = 115200
 ser = None
@@ -28,6 +29,18 @@ def send_to_mcu(msg):
         print(f"-> MCU: {msg.strip()}")
     except Exception as e:
         print(f"nu uh failed to send to mcu: {e}")
+
+def cleanup():
+    print("cleaning up and notifying MCU...")
+    try:
+        send_to_mcu("HOST:DISCONNECTED\n")
+        time.sleep(0.05)
+        if ser and ser.is_open:
+            ser.close()
+    except Exception:
+        pass
+
+atexit.register(cleanup)
 
 DBusGMainLoop(set_as_default=True)
 ambus = dbus.SessionBus()
@@ -89,11 +102,16 @@ def listen():
 
 threading.Thread(target=listen, daemon=True).start()
 
+had_player = False
+
+# Periodic progress bar updater (every 1 second)
 def progress_loop():
+    global had_player
     while True:
         try:
             get = get_mpris()
             if get:
+                had_player = True
                 props = dbus.Interface(get, 'org.freedesktop.DBus.Properties')
                 status = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus'))
                 if status == 'Playing':
@@ -104,6 +122,14 @@ def progress_loop():
                     cur_sec = pos_us // 1000000
                     total_sec = len_us // 1000000 if len_us > 0 else 0
                     send_to_mcu(f"POS:{cur_sec}:{total_sec}\n")
+            else:
+                if had_player:
+                    had_player = False
+                    print("media player closed, resetting MCU to waiting for MPRIS...")
+                    send_to_mcu("TITLE:Waiting for MPRIS...\n")
+                    send_to_mcu("ARTIST:No active media player\n")
+                    send_to_mcu("STATUS:Idle\n")
+                    send_to_mcu("POS:0:0\n")
         except Exception:
             pass
         time.sleep(1.0)
@@ -113,15 +139,16 @@ threading.Thread(target=progress_loop, daemon=True).start()
 # cli debug controls for terminal testing
 def debug_cli():
     time.sleep(0.5)
-    print("\n--- debug ---")
-    print("commands:")
-    print("  p             : to pause and resume")
-    print("  n             : next")
-    print("  b             : previous")
-    print("  t <Title - Artist> : test without mpris")
-    print("  pos <cur> <total>  : song pos, pos (current) (total) in seconds")
-    print("  s <state>     : state pause or playing")
-    print("  q             : to exit :(")
+    print("\n--- debugers ---")
+    print("Commands:")
+    print("  p             : Toggle Play/Pause on PC MPRIS")
+    print("  n             : Next track on PC MPRIS")
+    print("  b             : Previous track on PC MPRIS")
+    print("  t <Title - Artist> : Send test track string to ESP32")
+    print("  pos <cur> <total>  : Send test progress in seconds (e.g. 'pos 45 210')")
+    print("  s <state>     : Send test status to ESP32 ('s Playing' or 's Paused')")
+    print("  reset         : Force MCU back to default Waiting for MPRIS")
+    print("  q             : Exit script")
     print("-----------------------\n")
 
     while True:
@@ -151,9 +178,11 @@ def debug_cli():
             elif cmd.startswith('s '):
                 custom_status = cmd[2:].strip()
                 send_to_mcu(f"STATUS:{custom_status}\n")
+            elif cmd == 'reset':
+                send_to_mcu("HOST:DISCONNECTED\n")
             elif cmd == 'q':
                 print("stop, exitting.")
-                ser.close()
+                cleanup()
                 exit(0)
         except (EOFError, KeyboardInterrupt):
             break
@@ -161,20 +190,24 @@ def debug_cli():
 threading.Thread(target=debug_cli, daemon=True).start()
 
 def sync_initial_mpris():
+    global had_player
+    send_to_mcu("HOST:CONNECTED\n")
     get = get_mpris()
     if not get:
-        print("no active media player found on startup. (launch Spotify/VLC or use debug CLI 't ...')")
-        send_to_mcu("TITLE:No Player Found\n")
-        send_to_mcu("ARTIST:Launch Spotify/VLC or use 't'\n")
+        had_player = False
+        print("no active media player found on startup. (play some music or use 't' to simulate')")
+        send_to_mcu("TITLE:Waiting for MPRIS...\n")
+        send_to_mcu("ARTIST:Launch a music\n")
         send_to_mcu("STATUS:Idle\n")
         send_to_mcu("POS:0:0\n")
         return
     try:
+        had_player = True
         props = dbus.Interface(get, 'org.freedesktop.DBus.Properties')
         metadata = props.Get('org.mpris.MediaPlayer2.Player', 'Metadata')
         status = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus'))
 
-        titit = str(metadata.get('xesam:title', 'Unknown Title'))
+        titit = str(metadata.get('xesam:title', 'Waiting for MPRIS...'))
         artists = metadata.get('xesam:artist', ['Unknown Artist'])
         artist = str(artists[0] if (isinstance(artists, (list, tuple)) and len(artists) > 0) else artists)
 
@@ -191,13 +224,15 @@ def sync_initial_mpris():
     except Exception as e:
         print(f"could not sync initial mpris: {e}")
 
-# syncing
+# initial sync
 sync_initial_mpris()
 
 def on_properties_changed(interface, changed_properties, invalidated_properties, path=None):
+    global had_player
     if 'Metadata' in changed_properties:
+        had_player = True
         metadata = changed_properties['Metadata']
-        titit = str(metadata.get('xesam:title', 'Unknown Title'))
+        titit = str(metadata.get('xesam:title', 'Waiting for MPRIS...'))
         artists = metadata.get('xesam:artist', ['Unknown Artist'])
         artist = str(artists[0] if (isinstance(artists, (list, tuple)) and len(artists) > 0) else artists)
 
@@ -224,3 +259,4 @@ try:
     gooning.run()
 except KeyboardInterrupt:
     print("stop, exitting.")
+    cleanup()
