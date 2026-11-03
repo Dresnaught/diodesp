@@ -1,2 +1,3 @@
 idf_component_register(SRCS "main.c"
-                    INCLUDE_DIRS ".")
+                            "lovyan_config.cpp"
+                    INCLUDE_DIRS "." "include")
