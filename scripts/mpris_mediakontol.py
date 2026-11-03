@@ -1,0 +1,226 @@
+import dbus
+import serial
+import threading
+import time
+from dbus.mainloop.glib import DBusGMainLoop
+from gi.repository import GLib
+
+# ur UeSBe or mcu bro.
+SERIAL_COM = '/dev/ttyACM0'
+baud = 115200
+ser = None
+ser_lock = threading.Lock()
+
+try:
+    ser = serial.Serial(SERIAL_COM, baud, timeout=0.3)
+    print(f"connected to mcu(esp32) to {SERIAL_COM}")
+except Exception as e:
+    print(f"failed. No such device >:( . {e}, try again.")
+    exit(1)
+
+def send_to_mcu(msg):
+    if not ser or not ser.is_open:
+        return
+    try:
+        with ser_lock:
+            ser.write(msg.encode('utf-8'))
+            ser.flush()
+        print(f"-> MCU: {msg.strip()}")
+    except Exception as e:
+        print(f"nu uh failed to send to mcu: {e}")
+
+DBusGMainLoop(set_as_default=True)
+ambus = dbus.SessionBus()
+
+def get_mpris():
+    for service in ambus.list_names():
+        if service.startswith('org.mpris.MediaPlayer2'):
+            try:
+                return ambus.get_object(service, '/org/mpris/MediaPlayer2')
+            except Exception:
+                pass
+    return None
+
+def send_cum(a):
+    get = get_mpris()
+    if not get:
+        print("no mpris player found :(")
+        return
+    try:
+        get_dbus = dbus.Interface(get, 'org.mpris.MediaPlayer2.Player')
+        match a:
+            case 0:
+                get_dbus.PlayPause()
+                print("mpris: toggled play/pause")
+            case 1:
+                get_dbus.Next()
+                print("mpris: skipped next")
+            case 2:
+                get_dbus.Previous()
+                print("mpris: skipped previous")
+    except Exception as e:
+        print(f"error sending mpris command: {e}")
+
+def listen():
+    while True:
+        try:
+            if ser.in_waiting > 0:
+                line = ser.readline().decode('utf-8', errors='ignore').strip()
+                if not line:
+                    continue
+                print(f"<- MCU: {line}")
+                match line:
+                    case "pause:play":
+                        print("recieve pause/play from MCU, gonna do pause/continue")
+                        send_cum(0)
+                    case "next":
+                        print("recieve next from MCU, gonna continue")
+                        send_cum(1)
+                    case "previous":
+                        print("recieve previous from MCU: gonna go back")
+                        send_cum(2)
+                    case _:
+                        print(f"unknown mcu line: {line}")
+            else:
+                time.sleep(0.02)
+        except Exception as e:
+            print(f"error read serial {e}")
+            break
+
+threading.Thread(target=listen, daemon=True).start()
+
+def progress_loop():
+    while True:
+        try:
+            get = get_mpris()
+            if get:
+                props = dbus.Interface(get, 'org.freedesktop.DBus.Properties')
+                status = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus'))
+                if status == 'Playing':
+                    metadata = props.Get('org.mpris.MediaPlayer2.Player', 'Metadata')
+                    pos_us = int(props.Get('org.mpris.MediaPlayer2.Player', 'Position'))
+                    len_us = int(metadata.get('mpris:length', 0))
+
+                    cur_sec = pos_us // 1000000
+                    total_sec = len_us // 1000000 if len_us > 0 else 0
+                    send_to_mcu(f"POS:{cur_sec}:{total_sec}\n")
+        except Exception:
+            pass
+        time.sleep(1.0)
+
+threading.Thread(target=progress_loop, daemon=True).start()
+
+# cli debug controls for terminal testing
+def debug_cli():
+    time.sleep(0.5)
+    print("\n--- debug ---")
+    print("commands:")
+    print("  p             : to pause and resume")
+    print("  n             : next")
+    print("  b             : previous")
+    print("  t <Title - Artist> : test without mpris")
+    print("  pos <cur> <total>  : song pos, pos (current) (total) in seconds")
+    print("  s <state>     : state pause or playing")
+    print("  q             : to exit :(")
+    print("-----------------------\n")
+
+    while True:
+        try:
+            cmd = input().strip()
+            if not cmd:
+                continue
+            if cmd == 'p':
+                send_cum(0)
+            elif cmd == 'n':
+                send_cum(1)
+            elif cmd == 'b':
+                send_cum(2)
+            elif cmd.startswith('t '):
+                custom_txt = cmd[2:].strip()
+                if " - " in custom_txt:
+                    parts = custom_txt.split(" - ", 1)
+                    send_to_mcu(f"TITLE:{parts[0]}\n")
+                    send_to_mcu(f"ARTIST:{parts[1]}\n")
+                else:
+                    send_to_mcu(f"TITLE:{custom_txt}\n")
+                    send_to_mcu("ARTIST:Unknown Artist\n")
+            elif cmd.startswith('pos '):
+                parts = cmd[4:].strip().split()
+                if len(parts) >= 2:
+                    send_to_mcu(f"POS:{parts[0]}:{parts[1]}\n")
+            elif cmd.startswith('s '):
+                custom_status = cmd[2:].strip()
+                send_to_mcu(f"STATUS:{custom_status}\n")
+            elif cmd == 'q':
+                print("stop, exitting.")
+                ser.close()
+                exit(0)
+        except (EOFError, KeyboardInterrupt):
+            break
+
+threading.Thread(target=debug_cli, daemon=True).start()
+
+def sync_initial_mpris():
+    get = get_mpris()
+    if not get:
+        print("no active media player found on startup. (launch Spotify/VLC or use debug CLI 't ...')")
+        send_to_mcu("TITLE:No Player Found\n")
+        send_to_mcu("ARTIST:Launch Spotify/VLC or use 't'\n")
+        send_to_mcu("STATUS:Idle\n")
+        send_to_mcu("POS:0:0\n")
+        return
+    try:
+        props = dbus.Interface(get, 'org.freedesktop.DBus.Properties')
+        metadata = props.Get('org.mpris.MediaPlayer2.Player', 'Metadata')
+        status = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus'))
+
+        titit = str(metadata.get('xesam:title', 'Unknown Title'))
+        artists = metadata.get('xesam:artist', ['Unknown Artist'])
+        artist = str(artists[0] if (isinstance(artists, (list, tuple)) and len(artists) > 0) else artists)
+
+        pos_us = int(props.Get('org.mpris.MediaPlayer2.Player', 'Position'))
+        len_us = int(metadata.get('mpris:length', 0))
+        cur_sec = pos_us // 1000000
+        total_sec = len_us // 1000000 if len_us > 0 else 0
+
+        send_to_mcu(f"TITLE:{titit}\n")
+        send_to_mcu(f"ARTIST:{artist}\n")
+        send_to_mcu(f"STATUS:{status}\n")
+        send_to_mcu(f"POS:{cur_sec}:{total_sec}\n")
+        print(f"synced current track: {titit} - {artist} ({status}) [{cur_sec}/{total_sec}s]")
+    except Exception as e:
+        print(f"could not sync initial mpris: {e}")
+
+# syncing
+sync_initial_mpris()
+
+def on_properties_changed(interface, changed_properties, invalidated_properties, path=None):
+    if 'Metadata' in changed_properties:
+        metadata = changed_properties['Metadata']
+        titit = str(metadata.get('xesam:title', 'Unknown Title'))
+        artists = metadata.get('xesam:artist', ['Unknown Artist'])
+        artist = str(artists[0] if (isinstance(artists, (list, tuple)) and len(artists) > 0) else artists)
+
+        send_to_mcu(f"TITLE:{titit}\n")
+        send_to_mcu(f"ARTIST:{artist}\n")
+
+        len_us = int(metadata.get('mpris:length', 0))
+        total_sec = len_us // 1000000 if len_us > 0 else 0
+        send_to_mcu(f"POS:0:{total_sec}\n")
+
+    if 'PlaybackStatus' in changed_properties:
+        status = str(changed_properties['PlaybackStatus'])
+        send_to_mcu(f"STATUS:{status}\n")
+
+ambus.add_signal_receiver(
+    on_properties_changed,
+    signal_name='PropertiesChanged',
+    dbus_interface='org.freedesktop.DBus.Properties',
+    path_keyword='path'
+)
+
+try:
+    gooning = GLib.MainLoop()
+    gooning.run()
+except KeyboardInterrupt:
+    print("stop, exitting.")

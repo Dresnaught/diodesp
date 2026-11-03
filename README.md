@@ -19,12 +19,24 @@ the features im planning is quite a lot but, here goes whats fixed tba:
 
 ## to build
 requirements:
-- esp-idf (5.5+) i recomend using the newest version 6+ though
-- vscode with esp-idf extention
+- esp-idf, ( i recomend using newest one: 6.1.0)
+- python ( to ran the script for now).
 
-`to build: clone this repo then just build and flash using those extention buttons! :)`
+step;
+1. git clone or fork this repo.
+2. go to the directory of this repo.
+3. don't forget to run the `export.sh` from esp-idf
+4. ran 
+   ```bash
+   idf.py build
+   idf.py flash
+   ```
+5. done!
 
-I will provide more ways to build later. just not at the current time, as i'm not really rush on to this project.
+or you can specify what port by:
+`idf.py -p <to/port/USB> flash`
+
+- oh yeah, one thing i didnt include the sdkconfig, i will just not now
 
 ## tba
 to be added as time goes.
