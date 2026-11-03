@@ -13,6 +13,7 @@
 #include "class/audio/audio_device.h"
 #include "lvgl.h"
 #include "include/lovyan_config.h"
+#include "include/theme.h"
 
 // Hardware navigation buttons
 #define PSPL GPIO_NUM_4  // OK / Play-Pause
@@ -37,6 +38,39 @@ static inline void lvgl_unlock(void) {
     if (lvgl_mux) {
         xSemaphoreGive(lvgl_mux);
     }
+}
+
+// Global active theme instance
+app_theme_t theme;
+
+void theme_init_base(void) {
+    // Screen and surfaces
+    theme.bg_screen         = lv_color_hex(0x121212);
+    theme.bg_card           = lv_color_hex(0x1E1E1E);
+    theme.bg_btn            = lv_color_hex(0x242424);
+    theme.bg_btn_subtle     = lv_color_hex(0x222222);
+    theme.bg_item           = lv_color_hex(0x282828);
+    theme.bg_overlay        = lv_color_hex(0x000000);
+
+    // Borders and dividers
+    theme.border            = lv_color_hex(0x383838);
+    theme.border_subtle     = lv_color_hex(0x2E2E2E);
+    theme.divider           = lv_color_hex(0x262626);
+
+    // Typography and text
+    theme.text_title        = lv_color_hex(0xFFFFFF);
+    theme.text_primary      = lv_color_hex(0xFFFFFF);
+    theme.text_secondary    = lv_color_hex(0xAAAAAA);
+    theme.text_muted        = lv_color_hex(0x888888);
+    theme.text_dim          = lv_color_hex(0x555555);
+    theme.text_inverse      = lv_color_hex(0x000000);
+
+    // Accents and status indicators
+    theme.accent_primary    = lv_color_hex(0x1DB954);
+    theme.accent_secondary  = lv_color_hex(0x00E5FF);
+    theme.status_playing    = lv_color_hex(0x1DB954);
+    theme.status_paused     = lv_color_hex(0xFF9800);
+    theme.danger            = lv_color_hex(0xFF5555);
 }
 
 // Page definitions
@@ -132,11 +166,11 @@ void ui_music_reset_default(void) {
     }
     if (label_artist) {
         lv_label_set_text(label_artist, "Python script not initiated");
-        lv_obj_set_style_text_color(label_artist, lv_color_hex(0x888888), 0);
+        lv_obj_set_style_text_color(label_artist, theme.text_muted, 0);
     }
     if (label_status) {
         lv_label_set_text(label_status, "DISCONNECTED");
-        lv_obj_set_style_text_color(label_status, lv_color_hex(0x888888), 0);
+        lv_obj_set_style_text_color(label_status, theme.text_muted, 0);
     }
     if (label_play_icon) {
         lv_label_set_text(label_play_icon, LV_SYMBOL_PLAY);
@@ -154,11 +188,11 @@ void ui_music_set_connected(bool connected) {
     if (connected) {
         if (label_status) {
             lv_label_set_text(label_status, "CONNECTED");
-            lv_obj_set_style_text_color(label_status, lv_color_hex(0x00E5FF), 0);
+            lv_obj_set_style_text_color(label_status, theme.accent_secondary, 0);
         }
         if (label_artist) {
             lv_label_set_text(label_artist, "Waiting for media player...");
-            lv_obj_set_style_text_color(label_artist, lv_color_hex(0xAAAAAA), 0);
+            lv_obj_set_style_text_color(label_artist, theme.text_secondary, 0);
         }
     } else {
         ui_music_reset_default();
@@ -176,7 +210,7 @@ void ui_music_set_artist(const char *artist) {
     if (!label_artist) return;
     if (artist && strlen(artist) > 0) {
         lv_label_set_text(label_artist, artist);
-        lv_obj_set_style_text_color(label_artist, lv_color_hex(0x1DB954), 0);
+        lv_obj_set_style_text_color(label_artist, theme.accent_primary, 0);
     }
 }
 
@@ -206,15 +240,15 @@ void ui_music_set_status(const char *status) {
     if (!label_status || !label_play_icon) return;
     if (strcasecmp(status, "Playing") == 0) {
         lv_label_set_text(label_status, "PLAYING");
-        lv_obj_set_style_text_color(label_status, lv_color_hex(0x1DB954), 0);
+        lv_obj_set_style_text_color(label_status, theme.status_playing, 0);
         lv_label_set_text(label_play_icon, LV_SYMBOL_PAUSE);
     } else if (strcasecmp(status, "Paused") == 0) {
         lv_label_set_text(label_status, "PAUSED");
-        lv_obj_set_style_text_color(label_status, lv_color_hex(0xFF9800), 0);
+        lv_obj_set_style_text_color(label_status, theme.status_paused, 0);
         lv_label_set_text(label_play_icon, LV_SYMBOL_PLAY);
     } else {
         lv_label_set_text(label_status, status);
-        lv_obj_set_style_text_color(label_status, lv_color_hex(0x888888), 0);
+        lv_obj_set_style_text_color(label_status, theme.text_muted, 0);
         lv_label_set_text(label_play_icon, LV_SYMBOL_PLAY);
     }
 }
@@ -248,7 +282,7 @@ void open_menu_popup(void) {
     menu_backdrop = lv_obj_create(screen);
     lv_obj_set_size(menu_backdrop, 480, 320);
     lv_obj_set_pos(menu_backdrop, 0, 0);
-    lv_obj_set_style_bg_color(menu_backdrop, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(menu_backdrop, theme.bg_overlay, 0);
     lv_obj_set_style_bg_opa(menu_backdrop, LV_OPA_60, 0);
     lv_obj_set_style_border_width(menu_backdrop, 0, 0);
     lv_obj_set_style_radius(menu_backdrop, 0, 0);
@@ -258,9 +292,9 @@ void open_menu_popup(void) {
     lv_obj_t *modal = lv_obj_create(menu_backdrop);
     lv_obj_set_size(modal, 260, 195);
     lv_obj_center(modal);
-    lv_obj_set_style_bg_color(modal, lv_color_hex(0x1E1E1E), 0);
+    lv_obj_set_style_bg_color(modal, theme.bg_card, 0);
     lv_obj_set_style_border_width(modal, 1, 0);
-    lv_obj_set_style_border_color(modal, lv_color_hex(0x383838), 0);
+    lv_obj_set_style_border_color(modal, theme.border, 0);
     lv_obj_set_style_radius(modal, 12, 0);
     lv_obj_set_style_pad_all(modal, 12, 0);
     lv_obj_remove_flag(modal, LV_OBJ_FLAG_SCROLLABLE);
@@ -268,7 +302,7 @@ void open_menu_popup(void) {
     lv_obj_t *lbl_hdr = lv_label_create(modal);
     lv_label_set_text(lbl_hdr, "SELECT PAGE");
     lv_obj_set_style_text_font(lbl_hdr, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(lbl_hdr, lv_color_hex(0x00E5FF), 0);
+    lv_obj_set_style_text_color(lbl_hdr, theme.accent_secondary, 0);
     lv_obj_set_align(lbl_hdr, LV_ALIGN_TOP_MID);
 
     menu_group = lv_group_create();
@@ -277,10 +311,10 @@ void open_menu_popup(void) {
     lv_obj_t *btn_music = lv_button_create(modal);
     lv_obj_set_size(btn_music, 234, 38);
     lv_obj_set_pos(btn_music, 0, 30);
-    lv_obj_set_style_bg_color(btn_music, lv_color_hex(0x282828), 0);
+    lv_obj_set_style_bg_color(btn_music, theme.bg_item, 0);
     lv_obj_set_style_radius(btn_music, 8, 0);
     lv_obj_set_style_outline_width(btn_music, 2, LV_STATE_FOCUSED);
-    lv_obj_set_style_outline_color(btn_music, lv_color_hex(0x1DB954), LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_color(btn_music, theme.accent_primary, LV_STATE_FOCUSED);
     lv_obj_set_style_outline_pad(btn_music, 2, LV_STATE_FOCUSED);
     lv_obj_add_event_cb(btn_music, menu_item_click_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)0);
 
@@ -292,10 +326,10 @@ void open_menu_popup(void) {
     lv_obj_t *btn_eq = lv_button_create(modal);
     lv_obj_set_size(btn_eq, 234, 38);
     lv_obj_set_pos(btn_eq, 0, 74);
-    lv_obj_set_style_bg_color(btn_eq, lv_color_hex(0x282828), 0);
+    lv_obj_set_style_bg_color(btn_eq, theme.bg_item, 0);
     lv_obj_set_style_radius(btn_eq, 8, 0);
     lv_obj_set_style_outline_width(btn_eq, 2, LV_STATE_FOCUSED);
-    lv_obj_set_style_outline_color(btn_eq, lv_color_hex(0x00E5FF), LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_color(btn_eq, theme.accent_secondary, LV_STATE_FOCUSED);
     lv_obj_set_style_outline_pad(btn_eq, 2, LV_STATE_FOCUSED);
     lv_obj_add_event_cb(btn_eq, menu_item_click_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)1);
 
@@ -307,10 +341,10 @@ void open_menu_popup(void) {
     lv_obj_t *btn_close = lv_button_create(modal);
     lv_obj_set_size(btn_close, 234, 34);
     lv_obj_set_pos(btn_close, 0, 118);
-    lv_obj_set_style_bg_color(btn_close, lv_color_hex(0x222222), 0);
+    lv_obj_set_style_bg_color(btn_close, theme.bg_btn_subtle, 0);
     lv_obj_set_style_radius(btn_close, 8, 0);
     lv_obj_set_style_outline_width(btn_close, 2, LV_STATE_FOCUSED);
-    lv_obj_set_style_outline_color(btn_close, lv_color_hex(0xFF5555), LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_color(btn_close, theme.danger, LV_STATE_FOCUSED);
     lv_obj_set_style_outline_pad(btn_close, 2, LV_STATE_FOCUSED);
     lv_obj_add_event_cb(btn_close, menu_item_click_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)2);
 
@@ -356,7 +390,7 @@ static void create_music_page(lv_obj_t *parent) {
     lv_obj_t *page = pages[PAGE_MUSIC];
     lv_obj_set_size(page, 480, 320);
     lv_obj_set_pos(page, 0, 0);
-    lv_obj_set_style_bg_color(page, lv_color_hex(0x121212), 0);
+    lv_obj_set_style_bg_color(page, theme.bg_screen, 0);
     lv_obj_set_style_border_width(page, 0, 0);
     lv_obj_set_style_radius(page, 0, 0);
     lv_obj_set_style_pad_all(page, 0, 0);
@@ -367,21 +401,21 @@ static void create_music_page(lv_obj_t *parent) {
     // Header
     lv_obj_t *header_label = lv_label_create(page);
     lv_label_set_text(header_label, "DIODESP");
-    lv_obj_set_style_text_color(header_label, lv_color_hex(0x1DB954), 0);
+    lv_obj_set_style_text_color(header_label, theme.accent_primary, 0);
     lv_obj_set_pos(header_label, 20, 12);
 
     label_status = lv_label_create(page);
     lv_label_set_text(label_status, "DISCONNECTED");
-    lv_obj_set_style_text_color(label_status, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_color(label_status, theme.text_muted, 0);
     lv_obj_set_pos(label_status, 110, 12);
 
     // Menu button
     lv_obj_t *btn_menu = lv_button_create(page);
     lv_obj_set_size(btn_menu, 90, 26);
     lv_obj_set_pos(btn_menu, 370, 8);
-    lv_obj_set_style_bg_color(btn_menu, lv_color_hex(0x222222), 0);
+    lv_obj_set_style_bg_color(btn_menu, theme.bg_btn_subtle, 0);
     lv_obj_set_style_border_width(btn_menu, 1, 0);
-    lv_obj_set_style_border_color(btn_menu, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_border_color(btn_menu, theme.border_subtle, 0);
     lv_obj_set_style_radius(btn_menu, 13, 0);
     lv_obj_add_style(btn_menu, &style_focus, LV_STATE_FOCUSED);
     lv_obj_add_event_cb(btn_menu, btn_menu_event_cb, LV_EVENT_CLICKED, NULL);
@@ -394,30 +428,30 @@ static void create_music_page(lv_obj_t *parent) {
     lv_obj_t *line = lv_obj_create(page);
     lv_obj_set_size(line, 440, 1);
     lv_obj_set_pos(line, 20, 38);
-    lv_obj_set_style_bg_color(line, lv_color_hex(0x262626), 0);
+    lv_obj_set_style_bg_color(line, theme.divider, 0);
     lv_obj_set_style_border_width(line, 0, 0);
 
     // Album Art container
     lv_obj_t *art_box = lv_obj_create(page);
     lv_obj_set_size(art_box, 130, 130);
     lv_obj_set_pos(art_box, 20, 50);
-    lv_obj_set_style_bg_color(art_box, lv_color_hex(0x1E1E1E), 0);
+    lv_obj_set_style_bg_color(art_box, theme.bg_card, 0);
     lv_obj_set_style_border_width(art_box, 1, 0);
-    lv_obj_set_style_border_color(art_box, lv_color_hex(0x2E2E2E), 0);
+    lv_obj_set_style_border_color(art_box, theme.border_subtle, 0);
     lv_obj_set_style_radius(art_box, 12, 0);
     lv_obj_remove_flag(art_box, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *art_lbl = lv_label_create(art_box);
     lv_label_set_text(art_lbl, LV_SYMBOL_AUDIO "\nMPRIS");
     lv_obj_set_style_text_align(art_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(art_lbl, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_text_color(art_lbl, theme.text_dim, 0);
     lv_obj_center(art_lbl);
 
-    // Titit and Artist
+    // Title and Artist
     label_title = lv_label_create(page);
     lv_label_set_text(label_title, "Waiting for MPRIS...");
     lv_obj_set_style_text_font(label_title, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(label_title, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_color(label_title, theme.text_title, 0);
     lv_obj_set_pos(label_title, 168, 50);
     lv_obj_set_width(label_title, 290);
     lv_label_set_long_mode(label_title, LV_LABEL_LONG_SCROLL_CIRCULAR);
@@ -425,7 +459,7 @@ static void create_music_page(lv_obj_t *parent) {
     label_artist = lv_label_create(page);
     lv_label_set_text(label_artist, "Python script not initiated");
     lv_obj_set_style_text_font(label_artist, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(label_artist, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_color(label_artist, theme.text_muted, 0);
     lv_obj_set_pos(label_artist, 168, 86);
     lv_obj_set_width(label_artist, 290);
     lv_label_set_long_mode(label_artist, LV_LABEL_LONG_SCROLL_CIRCULAR);
@@ -436,22 +470,22 @@ static void create_music_page(lv_obj_t *parent) {
     lv_obj_set_pos(bar_progress, 168, 122);
     lv_bar_set_range(bar_progress, 0, 100);
     lv_bar_set_value(bar_progress, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(bar_progress, lv_color_hex(0x282828), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(bar_progress, lv_color_hex(0x1DB954), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(bar_progress, theme.bg_item, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar_progress, theme.accent_primary, LV_PART_INDICATOR);
     lv_obj_set_style_radius(bar_progress, 4, 0);
 
     // Elapsed / Total Time
     label_time = lv_label_create(page);
     lv_label_set_text(label_time, "00:00 / 00:00");
     lv_obj_set_style_text_font(label_time, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(label_time, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_color(label_time, theme.text_muted, 0);
     lv_obj_set_pos(label_time, 168, 138);
 
     // Playback control buttons
     lv_obj_t *btn_prev = lv_button_create(page);
     lv_obj_set_size(btn_prev, 64, 46);
     lv_obj_set_pos(btn_prev, 120, 205);
-    lv_obj_set_style_bg_color(btn_prev, lv_color_hex(0x242424), 0);
+    lv_obj_set_style_bg_color(btn_prev, theme.bg_btn, 0);
     lv_obj_set_style_radius(btn_prev, 23, 0);
     lv_obj_add_style(btn_prev, &style_focus, LV_STATE_FOCUSED);
     lv_obj_add_event_cb(btn_prev, btn_mpris_event_cb, LV_EVENT_CLICKED, (void *)"previous\n");
@@ -463,20 +497,20 @@ static void create_music_page(lv_obj_t *parent) {
     btn_play_obj = lv_button_create(page);
     lv_obj_set_size(btn_play_obj, 64, 64);
     lv_obj_set_pos(btn_play_obj, 208, 196);
-    lv_obj_set_style_bg_color(btn_play_obj, lv_color_hex(0x1DB954), 0);
+    lv_obj_set_style_bg_color(btn_play_obj, theme.accent_primary, 0);
     lv_obj_set_style_radius(btn_play_obj, 32, 0);
     lv_obj_add_style(btn_play_obj, &style_focus, LV_STATE_FOCUSED);
     lv_obj_add_event_cb(btn_play_obj, btn_mpris_event_cb, LV_EVENT_CLICKED, (void *)"pause:play\n");
 
     label_play_icon = lv_label_create(btn_play_obj);
     lv_label_set_text(label_play_icon, LV_SYMBOL_PLAY);
-    lv_obj_set_style_text_color(label_play_icon, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_color(label_play_icon, theme.text_inverse, 0);
     lv_obj_center(label_play_icon);
 
     lv_obj_t *btn_next = lv_button_create(page);
     lv_obj_set_size(btn_next, 64, 46);
     lv_obj_set_pos(btn_next, 296, 205);
-    lv_obj_set_style_bg_color(btn_next, lv_color_hex(0x242424), 0);
+    lv_obj_set_style_bg_color(btn_next, theme.bg_btn, 0);
     lv_obj_set_style_radius(btn_next, 23, 0);
     lv_obj_add_style(btn_next, &style_focus, LV_STATE_FOCUSED);
     lv_obj_add_event_cb(btn_next, btn_mpris_event_cb, LV_EVENT_CLICKED, (void *)"next\n");
@@ -489,7 +523,7 @@ static void create_music_page(lv_obj_t *parent) {
     hint_label = lv_label_create(page);
     lv_label_set_text(hint_label, "PREV: <   OK: Select   NEXT: >");
     lv_obj_set_style_text_font(hint_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(hint_label, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_text_color(hint_label, theme.text_dim, 0);
     lv_obj_set_align(hint_label, LV_ALIGN_BOTTOM_MID);
     lv_obj_set_style_pad_bottom(hint_label, 10, 0);
 
@@ -508,7 +542,7 @@ static void create_eq_page(lv_obj_t *parent) {
     lv_obj_t *page = pages[PAGE_EQ];
     lv_obj_set_size(page, 480, 320);
     lv_obj_set_pos(page, 0, 0);
-    lv_obj_set_style_bg_color(page, lv_color_hex(0x121212), 0);
+    lv_obj_set_style_bg_color(page, theme.bg_screen, 0);
     lv_obj_set_style_border_width(page, 0, 0);
     lv_obj_set_style_radius(page, 0, 0);
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
@@ -518,16 +552,16 @@ static void create_eq_page(lv_obj_t *parent) {
     // Header
     lv_obj_t *header_label = lv_label_create(page);
     lv_label_set_text(header_label, "DIODESP • EQUALIZER");
-    lv_obj_set_style_text_color(header_label, lv_color_hex(0x00E5FF), 0);
+    lv_obj_set_style_text_color(header_label, theme.accent_secondary, 0);
     lv_obj_set_pos(header_label, 20, 12);
 
     // Menu button on EQ page
     lv_obj_t *btn_menu_eq = lv_button_create(page);
     lv_obj_set_size(btn_menu_eq, 90, 26);
     lv_obj_set_pos(btn_menu_eq, 370, 8);
-    lv_obj_set_style_bg_color(btn_menu_eq, lv_color_hex(0x222222), 0);
+    lv_obj_set_style_bg_color(btn_menu_eq, theme.bg_btn_subtle, 0);
     lv_obj_set_style_border_width(btn_menu_eq, 1, 0);
-    lv_obj_set_style_border_color(btn_menu_eq, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_border_color(btn_menu_eq, theme.border_subtle, 0);
     lv_obj_set_style_radius(btn_menu_eq, 13, 0);
     lv_obj_add_style(btn_menu_eq, &style_focus, LV_STATE_FOCUSED);
     lv_obj_add_event_cb(btn_menu_eq, btn_menu_event_cb, LV_EVENT_CLICKED, NULL);
@@ -542,7 +576,7 @@ static void create_eq_page(lv_obj_t *parent) {
     lv_obj_t *eq_center_lbl = lv_label_create(page);
     lv_label_set_text(eq_center_lbl, "EQUALIZER DSP PAGE\n(DSP Biquads & Spectrum)");
     lv_obj_set_style_text_align(eq_center_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(eq_center_lbl, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_color(eq_center_lbl, theme.text_muted, 0);
     lv_obj_center(eq_center_lbl);
 
     lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
@@ -789,7 +823,7 @@ static void button_task(void *pvParameters) {
 void render(void *pvParameters) {
     lv_style_init(&style_focus);
     lv_style_set_outline_width(&style_focus, 2);
-    lv_style_set_outline_color(&style_focus, lv_color_hex(0x1DB954));
+    lv_style_set_outline_color(&style_focus, theme.accent_primary);
     lv_style_set_outline_pad(&style_focus, 3);
     lv_style_set_outline_opa(&style_focus, LV_OPA_COVER);
 
@@ -811,6 +845,7 @@ void render(void *pvParameters) {
 }
 
 void app_main(void) {
+    theme_init_base();
     lvgl_mux = xSemaphoreCreateMutex();
     lv_init();
     GF_to_LV();
