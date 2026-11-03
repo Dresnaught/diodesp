@@ -39,8 +39,6 @@ or you can specify what port by:
 `idf.py -p <to/port/USB> flash`
 and if you want to use jtag method: `idf.py openocd flash` or if you want to specify the port ` idf.py openocd -p <to/port/USB> flash`
 
-- oh yeah, one thing i didnt include the sdkconfig., i will just not now
-
 ## whats done
 - the usb to mpris script is done and working fine
 - display tft using lvgl and lovyanGFX is working fine
