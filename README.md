@@ -42,6 +42,7 @@ or you can specify what port by:
 - the usb to mpris script is done and working fine
 - display tft using lvgl and lovyanGFX is working fine
 - able to display whats playing and control media using buttons working fine
+- able to show the image art from the music playing, via mpris
 
 ## whats not done yet
 - the voice changer, (it only has the base page display, usb code configuration for that is hasnt done yet)

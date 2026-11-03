@@ -3,6 +3,10 @@ import serial
 import threading
 import time
 import atexit
+import io
+import urllib.parse
+import urllib.request
+from PIL import Image
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
@@ -11,6 +15,7 @@ SERIAL_COM = '/dev/ttyACM0'
 baud = 115200
 ser = None
 ser_lock = threading.Lock()
+last_art_url = None
 
 try:
     ser = serial.Serial(SERIAL_COM, baud, timeout=0.3)
@@ -29,6 +34,73 @@ def send_to_mcu(msg):
         print(f"-> MCU: {msg.strip()}")
     except Exception as e:
         print(f"nu uh failed to send to mcu: {e}")
+
+def convert_art_to_rgb565(art_url):
+    try:
+        if not art_url:
+            return None
+        if art_url.startswith('file://'):
+            file_path = urllib.parse.unquote(urllib.parse.urlparse(art_url).path)
+            img = Image.open(file_path)
+        elif art_url.startswith('http://') or art_url.startswith('https://'):
+            req = urllib.request.Request(art_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                img = Image.open(io.BytesIO(resp.read()))
+        else:
+            img = Image.open(art_url)
+
+        img = img.convert("RGB")
+        w, h = img.size
+        min_dim = min(w, h)
+        left = (w - min_dim) // 2
+        top = (h - min_dim) // 2
+        img = img.crop((left, top, left + min_dim, top + min_dim))
+        img = img.resize((130, 130), Image.Resampling.LANCZOS)
+
+        raw = img.tobytes()
+        out = bytearray(130 * 130 * 2)
+        j = 0
+        for i in range(0, len(raw), 3):
+            r, g, b = raw[i], raw[i+1], raw[i+2]
+            val = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+            out[j] = val & 0xFF
+            out[j+1] = (val >> 8) & 0xFF
+            j += 2
+        return bytes(out)
+    except Exception as e:
+        print(f"error processing album art from {art_url}: {e}")
+        return None
+
+def send_image_to_mcu(raw_data):
+    if not ser or not ser.is_open or not raw_data:
+        return
+    try:
+        with ser_lock:
+            header = f"IMG:{len(raw_data)}\n".encode('ascii')
+            ser.write(header)
+            ser.flush()
+            chunk_size = 2048
+            for i in range(0, len(raw_data), chunk_size):
+                ser.write(raw_data[i:i+chunk_size])
+            ser.flush()
+        print(f"-> MCU: Sent album art ({len(raw_data)} bytes)")
+    except Exception as e:
+        print(f"failed to send image to mcu: {e}")
+
+def sync_art(art_url):
+    global last_art_url
+    if art_url == last_art_url:
+        return
+    last_art_url = art_url
+    if art_url:
+        print(f"mpris: fetching album art from {art_url}")
+        data = convert_art_to_rgb565(art_url)
+        if data:
+            send_image_to_mcu(data)
+        else:
+            send_to_mcu("IMG:CLEAR\n")
+    else:
+        send_to_mcu("IMG:CLEAR\n")
 
 def cleanup():
     print("cleaning up and notifying MCU...")
@@ -126,10 +198,12 @@ def progress_loop():
                 if had_player:
                     had_player = False
                     print("media player closed, resetting MCU to waiting for MPRIS...")
+                    last_art_url = None
                     send_to_mcu("TITLE:Waiting for MPRIS...\n")
                     send_to_mcu("ARTIST:No active media player\n")
                     send_to_mcu("STATUS:Idle\n")
                     send_to_mcu("POS:0:0\n")
+                    send_to_mcu("IMG:CLEAR\n")
         except Exception:
             pass
         time.sleep(1.0)
@@ -147,6 +221,7 @@ def debug_cli():
     print("  t <Title - Artist> : Send test track string to ESP32")
     print("  pos <cur> <total>  : Send test progress in seconds (e.g. 'pos 45 210')")
     print("  s <state>     : Send test status to ESP32 ('s Playing' or 's Paused')")
+    print("  img <file_or_url>  : Send test image to ESP32 (or 'img clear')")
     print("  reset         : Force MCU back to default Waiting for MPRIS")
     print("  q             : Exit script")
     print("-----------------------\n")
@@ -178,6 +253,14 @@ def debug_cli():
             elif cmd.startswith('s '):
                 custom_status = cmd[2:].strip()
                 send_to_mcu(f"STATUS:{custom_status}\n")
+            elif cmd.startswith('img '):
+                target = cmd[4:].strip()
+                if target.lower() == 'clear':
+                    send_to_mcu("IMG:CLEAR\n")
+                else:
+                    data = convert_art_to_rgb565(target)
+                    if data:
+                        send_image_to_mcu(data)
             elif cmd == 'reset':
                 send_to_mcu("HOST:DISCONNECTED\n")
             elif cmd == 'q':
@@ -200,6 +283,7 @@ def sync_initial_mpris():
         send_to_mcu("ARTIST:Launch a music\n")
         send_to_mcu("STATUS:Idle\n")
         send_to_mcu("POS:0:0\n")
+        send_to_mcu("IMG:CLEAR\n")
         return
     try:
         had_player = True
@@ -220,6 +304,10 @@ def sync_initial_mpris():
         send_to_mcu(f"ARTIST:{artist}\n")
         send_to_mcu(f"STATUS:{status}\n")
         send_to_mcu(f"POS:{cur_sec}:{total_sec}\n")
+
+        art_url = str(metadata.get('mpris:artUrl', ''))
+        sync_art(art_url)
+
         print(f"synced current track: {titit} - {artist} ({status}) [{cur_sec}/{total_sec}s]")
     except Exception as e:
         print(f"could not sync initial mpris: {e}")
@@ -242,6 +330,9 @@ def on_properties_changed(interface, changed_properties, invalidated_properties,
         len_us = int(metadata.get('mpris:length', 0))
         total_sec = len_us // 1000000 if len_us > 0 else 0
         send_to_mcu(f"POS:0:{total_sec}\n")
+
+        art_url = str(metadata.get('mpris:artUrl', ''))
+        sync_art(art_url)
 
     if 'PlaybackStatus' in changed_properties:
         status = str(changed_properties['PlaybackStatus'])

@@ -6,6 +6,7 @@
 #include "driver/gpio.h"
 #include "sdkconfig.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "tinyusb.h"
 #include "tinyusb_default_config.h"
 #include "tinyusb_cdc_acm.h"
@@ -98,6 +99,35 @@ static lv_obj_t *bar_progress = NULL;
 static lv_obj_t *label_time = NULL;
 static lv_obj_t *btn_play_obj = NULL;
 static lv_obj_t *hint_label = NULL;
+static lv_obj_t *art_img = NULL;
+static lv_obj_t *art_lbl = NULL;
+
+// Album art definitions (130x130 RGB565)
+#define ART_IMG_W 130
+#define ART_IMG_H 130
+#define ART_IMG_SIZE (ART_IMG_W * ART_IMG_H * 2)
+
+static uint8_t *art_img_buf = NULL;
+static lv_image_dsc_t art_img_dsc = {
+    .header.magic = LV_IMAGE_HEADER_MAGIC,
+    .header.cf = LV_COLOR_FORMAT_RGB565,
+    .header.flags = 0,
+    .header.w = ART_IMG_W,
+    .header.h = ART_IMG_H,
+    .header.stride = ART_IMG_W * 2,
+    .data_size = ART_IMG_SIZE,
+    .data = NULL,
+};
+
+// Serial RX parser state
+typedef enum {
+    RX_STATE_TEXT = 0,
+    RX_STATE_IMAGE,
+} rx_state_t;
+
+static rx_state_t rx_state = RX_STATE_TEXT;
+static size_t expected_img_bytes = 0;
+static size_t img_bytes_received = 0;
 
 // Focus style and hint visibility
 static lv_style_t style_focus;
@@ -160,7 +190,36 @@ void send_cdc_cmd(const char *cmd) {
     ESP_LOGI(DTAG, "Sent to PC: %s", cmd);
 }
 
+void ui_music_set_image(const uint8_t *data, uint16_t w, uint16_t h) {
+    if (!art_img || !art_lbl || !data) return;
+
+    art_img_dsc.header.w = w;
+    art_img_dsc.header.h = h;
+    art_img_dsc.header.stride = w * 2;
+    art_img_dsc.data_size = w * h * 2;
+    art_img_dsc.data = data;
+
+    lv_image_set_src(art_img, &art_img_dsc);
+    lv_obj_add_flag(art_lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(art_img, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_invalidate(art_img);
+}
+
+void ui_music_clear_image(void) {
+    if (art_img) {
+        lv_obj_add_flag(art_img, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (art_lbl) {
+        lv_obj_remove_flag(art_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void ui_music_reset_default(void) {
+    rx_state = RX_STATE_TEXT;
+    expected_img_bytes = 0;
+    img_bytes_received = 0;
+    ui_music_clear_image();
+
     if (label_title) {
         lv_label_set_text(label_title, "Waiting for MPRIS...");
     }
@@ -439,13 +498,20 @@ static void create_music_page(lv_obj_t *parent) {
     lv_obj_set_style_border_width(art_box, 1, 0);
     lv_obj_set_style_border_color(art_box, theme.border_subtle, 0);
     lv_obj_set_style_radius(art_box, 12, 0);
+    lv_obj_set_style_pad_all(art_box, 0, 0);
+    lv_obj_set_style_clip_corner(art_box, true, 0);
     lv_obj_remove_flag(art_box, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *art_lbl = lv_label_create(art_box);
+    art_lbl = lv_label_create(art_box);
     lv_label_set_text(art_lbl, LV_SYMBOL_AUDIO "\nMPRIS");
     lv_obj_set_style_text_align(art_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(art_lbl, theme.text_dim, 0);
     lv_obj_center(art_lbl);
+
+    art_img = lv_image_create(art_box);
+    lv_obj_set_size(art_img, 130, 130);
+    lv_obj_center(art_img);
+    lv_obj_add_flag(art_img, LV_OBJ_FLAG_HIDDEN);
 
     // Title and Artist
     label_title = lv_label_create(page);
@@ -656,26 +722,64 @@ static void process_serial_line(char *line) {
         }
     }
     else if (strncmp(line, "IMG:", 4) == 0) {
-        ESP_LOGI(DTAG, "Image byte received");
+        if (strncmp(line + 4, "CLEAR", 5) == 0) {
+            ESP_LOGI(DTAG, "Clear album art");
+            if (lvgl_lock(50)) {
+                ui_music_clear_image();
+                lvgl_unlock();
+            }
+        } else {
+            int img_len = atoi(line + 4);
+            if (img_len > 0 && img_len <= ART_IMG_SIZE) {
+                expected_img_bytes = (size_t)img_len;
+                img_bytes_received = 0;
+                rx_state = RX_STATE_IMAGE;
+                ESP_LOGI(DTAG, "Receiving image: %d bytes", img_len);
+            } else {
+                ESP_LOGW(DTAG, "Invalid image length: %d", img_len);
+            }
+        }
     }
 }
 
 static void rx_callback(int itf, cdcacm_event_t *event) {
     size_t rx_size = 0;
-    esp_err_t ret = tinyusb_cdcacm_read(itf, cdc_buffer, CDC_BUF_SIZE - 1, &rx_size);
+    esp_err_t ret = tinyusb_cdcacm_read(itf, cdc_buffer, CDC_BUF_SIZE, &rx_size);
     if (ret != ESP_OK || rx_size == 0) return;
 
-    for (size_t i = 0; i < rx_size; i++) {
-        char c = (char)cdc_buffer[i];
-        if (c == '\n' || c == '\r') {
-            if (rx_line_pos > 0) {
-                rx_line_buf[rx_line_pos] = '\0';
-                process_serial_line(rx_line_buf);
-                rx_line_pos = 0;
+    size_t i = 0;
+    while (i < rx_size) {
+        if (rx_state == RX_STATE_IMAGE) {
+            size_t needed = expected_img_bytes - img_bytes_received;
+            size_t available = rx_size - i;
+            size_t chunk = (available < needed) ? available : needed;
+
+            if (art_img_buf && (img_bytes_received + chunk <= ART_IMG_SIZE)) {
+                memcpy(&art_img_buf[img_bytes_received], &cdc_buffer[i], chunk);
+            }
+            img_bytes_received += chunk;
+            i += chunk;
+
+            if (img_bytes_received >= expected_img_bytes) {
+                rx_state = RX_STATE_TEXT;
+                ESP_LOGI(DTAG, "Image transfer complete (%u bytes)", (unsigned int)img_bytes_received);
+                if (lvgl_lock(50)) {
+                    ui_music_set_image(art_img_buf, ART_IMG_W, ART_IMG_H);
+                    lvgl_unlock();
+                }
             }
         } else {
-            if (rx_line_pos < sizeof(rx_line_buf) - 1) {
-                rx_line_buf[rx_line_pos++] = c;
+            char c = (char)cdc_buffer[i++];
+            if (c == '\n' || c == '\r') {
+                if (rx_line_pos > 0) {
+                    rx_line_buf[rx_line_pos] = '\0';
+                    process_serial_line(rx_line_buf);
+                    rx_line_pos = 0;
+                }
+            } else {
+                if (rx_line_pos < sizeof(rx_line_buf) - 1) {
+                    rx_line_buf[rx_line_pos++] = c;
+                }
             }
         }
     }
@@ -846,6 +950,14 @@ void render(void *pvParameters) {
 
 void app_main(void) {
     theme_init_base();
+
+    if (!art_img_buf) {
+        art_img_buf = (uint8_t *)heap_caps_malloc(ART_IMG_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!art_img_buf) {
+            art_img_buf = (uint8_t *)malloc(ART_IMG_SIZE);
+        }
+    }
+
     lvgl_mux = xSemaphoreCreateMutex();
     lv_init();
     GF_to_LV();
