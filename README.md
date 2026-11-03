@@ -17,24 +17,27 @@ the features:
 - ILI9488 3.5 Inch SPI display TFT
 - 3 buttons to navigate through the menu
 
-## to build
+## to build and flash
 requirements:
 - esp-idf, ( i recomend using newest one: 6.1.0)
 - python ( to ran the script for now).
+- mpris
 
 step;
 1. git clone or fork this repo.
 2. go to the directory of this repo.
 3. don't forget to run the `export.sh` from esp-idf
-4. ran 
+4. plug the mcu to flash, (i recommend using the uart one or the right port as the first port is used to the script.)
+5. ran 
    ```bash
    idf.py build
    idf.py flash
    ```
-5. done!
+6. done!
 
 or you can specify what port by:
 `idf.py -p <to/port/USB> flash`
+and if you want to use jtag method: `idf.py openocd flash` or if you want to specify the port ` idf.py openocd -p <to/port/USB> flash`
 
 - oh yeah, one thing i didnt include the sdkconfig., i will just not now
 
