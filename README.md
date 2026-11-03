@@ -1,21 +1,21 @@
 # DiodESP
 Multipurpose hardware device. (voice changer, Soundboard, and display things whats on your PC).
 
-for now im foccusing on linux only, sorry :(
-
-But Worry Not! i will plan to add other OS support later.
+for now im foccusing on linux only, sorry.
+But i will plan to add other OS support later.
 
 ## features
-the features im planning is quite a lot but, here goes whats fixed tba:
+the features:
 - voice changer(configurable)
 - Music player (display the image, and whats currently playing on your PC)
 - display Temps, CPU, RAM, GPU usage(configurable)
 - Soundboard to pass an mp3(or any audio files) to the eq(vc)/direct to the sound input from the esp
+- maybe more
 
 ## devices/part
 - ESP32-S3 N16R8
 - ILI9488 3.5 Inch SPI display TFT
-- few buttons to navigate through the menu
+- 3 buttons to navigate through the menu
 
 ## to build
 requirements:
@@ -36,8 +36,16 @@ step;
 or you can specify what port by:
 `idf.py -p <to/port/USB> flash`
 
-- oh yeah, one thing i didnt include the sdkconfig, i will just not now
+- oh yeah, one thing i didnt include the sdkconfig., i will just not now
 
-## tba
-to be added as time goes.
+## whats done
+- the usb to mpris script is done and working fine
+- display tft using lvgl and lovyanGFX is working fine
+- able to display whats playing and control media using buttons working fine
+
+## whats not done yet
+- the voice changer, (it only has the base page display, usb code configuration for that is hasnt done yet)
+- soundboard, hasnt do any code for that feature yet
+- page to display ram usage, cpu more into your pc is also not done yet
+- Schematic and PCB design, is also not done yet, with much probability will use I2S IC (like TLV320AIC3254) for later
 
