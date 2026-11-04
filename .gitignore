@@ -81,3 +81,6 @@ Desktop.ini
 
 # visual-code
 .vscode/
+
+# Lyric cache
+scripts/cache_lyric/

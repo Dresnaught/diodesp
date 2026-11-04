@@ -183,6 +183,7 @@ void open_menu_popup(void);
 void close_menu_popup(void);
 void start_view_transition(player_view_t target_view, bool animate);
 void switch_page(app_page_t page);
+void send_cdc_cmd(const char *cmd);
 
 void set_hint_visible(bool show) {
     if (hint_visible == show) return;
@@ -365,6 +366,7 @@ void switch_page(app_page_t page) {
         }
         active_group = music_group;
         start_view_transition(VIEW_STANDARD, true);
+        send_cdc_cmd("lyrics:close\n");
         if (btn_play_obj) {
             lv_group_focus_obj(btn_play_obj);
         }
@@ -377,6 +379,7 @@ void switch_page(app_page_t page) {
         }
         active_group = music_group;
         start_view_transition(VIEW_LYRICS, true);
+        send_cdc_cmd("lyrics:open\n");
         if (btn_play_obj) {
             lv_group_focus_obj(btn_play_obj);
         }
@@ -468,9 +471,7 @@ void ui_music_reset_default(void) {
     if (label_time) {
         lv_label_set_text(label_time, "00:00 / 00:00");
     }
-    ui_music_set_lyrics("• [Previous Lyric Line] •",
-                        "♪ Synchronized lyrics will display here ♪",
-                        "• [Next Lyric Line] •");
+    ui_music_set_lyrics("", "No lyric", "");
 }
 
 void ui_music_set_connected(bool connected) {
@@ -772,30 +773,30 @@ static void create_music_page(lv_obj_t *parent) {
     lv_obj_add_flag(lyric_box, LV_OBJ_FLAG_HIDDEN);
 
     label_lyric_prev = lv_label_create(lyric_box);
-    lv_label_set_text(label_lyric_prev, "• [Previous Lyric Line] •");
+    lv_label_set_text(label_lyric_prev, "");
     lv_obj_set_style_text_font(label_lyric_prev, &font_sub, 0);
     lv_obj_set_style_text_color(label_lyric_prev, theme.text_dim, 0);
     lv_obj_set_style_text_align(label_lyric_prev, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(label_lyric_prev, 260);
-    lv_obj_set_pos(label_lyric_prev, 4, 6);
+    lv_obj_set_pos(label_lyric_prev, 4, 18);
     lv_label_set_long_mode(label_lyric_prev, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
     label_lyric_curr = lv_label_create(lyric_box);
-    lv_label_set_text(label_lyric_curr, "♪ Synchronized lyrics ♪");
+    lv_label_set_text(label_lyric_curr, "No lyric");
     lv_obj_set_style_text_font(label_lyric_curr, &font_title, 0);
     lv_obj_set_style_text_color(label_lyric_curr, theme.accent_primary, 0);
     lv_obj_set_style_text_align(label_lyric_curr, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(label_lyric_curr, 260);
-    lv_obj_set_pos(label_lyric_curr, 4, 52);
+    lv_obj_set_pos(label_lyric_curr, 4, 66);
     lv_label_set_long_mode(label_lyric_curr, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
     label_lyric_next = lv_label_create(lyric_box);
-    lv_label_set_text(label_lyric_next, "• [Next Lyric Line] •");
+    lv_label_set_text(label_lyric_next, "");
     lv_obj_set_style_text_font(label_lyric_next, &font_sub, 0);
     lv_obj_set_style_text_color(label_lyric_next, theme.text_dim, 0);
     lv_obj_set_style_text_align(label_lyric_next, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(label_lyric_next, 260);
-    lv_obj_set_pos(label_lyric_next, 4, 118);
+    lv_obj_set_pos(label_lyric_next, 4, 114);
     lv_label_set_long_mode(label_lyric_next, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
     // Album Art container
@@ -827,7 +828,7 @@ static void create_music_page(lv_obj_t *parent) {
     lv_label_set_text(label_title, "Waiting for MPRIS...");
     lv_obj_set_style_text_font(label_title, &font_title, 0);
     lv_obj_set_style_text_color(label_title, theme.text_title, 0);
-    lv_obj_set_pos(label_title, 200, 50);
+    lv_obj_set_pos(label_title, 200, 54);
     lv_obj_set_width(label_title, 260);
     lv_label_set_long_mode(label_title, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
@@ -835,7 +836,7 @@ static void create_music_page(lv_obj_t *parent) {
     lv_label_set_text(label_artist, "Python script not initiated");
     lv_obj_set_style_text_font(label_artist, &font_sub, 0);
     lv_obj_set_style_text_color(label_artist, theme.text_muted, 0);
-    lv_obj_set_pos(label_artist, 200, 84);
+    lv_obj_set_pos(label_artist, 200, 80);
     lv_obj_set_width(label_artist, 260);
     lv_label_set_long_mode(label_artist, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
@@ -976,7 +977,7 @@ static void create_eq_page(lv_obj_t *parent) {
     lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
 }
 
-static char rx_line_buf[256];
+static char rx_line_buf[512];
 static size_t rx_line_pos = 0;
 
 static void process_serial_line(char *line) {
@@ -1051,6 +1052,7 @@ static void process_serial_line(char *line) {
     }
     else if (strncmp(line, "LYRIC:", 6) == 0) {
         char *payload = line + 6;
+        ESP_LOGI(DTAG, "Lyric: %s", payload);
         char *sep1 = strchr(payload, '|');
         if (sep1) {
             *sep1 = '\0';
@@ -1303,7 +1305,7 @@ static void button_task(void *pvParameters) {
 }
 
 void render(void *pvParameters) {
-    font_title = lv_font_montserrat_24;
+    font_title = lv_font_montserrat_14;
     font_sub = lv_font_montserrat_14;
 
 #if CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_14_CJK
