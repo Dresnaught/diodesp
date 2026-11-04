@@ -4,6 +4,10 @@ import threading
 import time
 import atexit
 import io
+import os
+import json
+import re
+import yaml
 import urllib.parse
 import urllib.request
 import unicodedata
@@ -18,6 +22,21 @@ ser = None
 ser_lock = threading.Lock()
 last_art_url = None
 ART_IMG_DIM = 160
+
+# lyrics state and cache
+lyrics_data = None
+lyrics_view_active = False
+current_lyric_tuple = None
+last_lyrics_track = (None, None)
+lyrics_lock = threading.Lock()
+
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache_lyric")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+LOCAL_LYRICS_DIRS = [
+    CACHE_DIR,
+    os.path.expanduser("~/.lyrics")
+]
 
 def clean_mpris_text(text):
     if not text:
@@ -127,6 +146,259 @@ def sync_art(art_url):
     else:
         send_to_mcu("IMG:CLEAR\n")
 
+def clean_lyric_line(txt):
+    if not txt:
+        return ""
+    txt = clean_mpris_text(txt)
+    return txt.replace('|', '/').replace('\n', ' ').replace('\r', '').strip()
+
+def parse_lrc(lrc_text):
+    lines = []
+    pattern = re.compile(r'^\[(\d+):(\d+(?:\.\d+)?)\](.*)$')
+    for raw_line in lrc_text.splitlines():
+        raw_line = raw_line.strip()
+        m = pattern.match(raw_line)
+        if m:
+            mins = int(m.group(1))
+            secs = float(m.group(2))
+            start_ms = int((mins * 60 + secs) * 1000)
+            txt = m.group(3).strip()
+            if txt:
+                lines.append({'text': txt, 'start_ms': start_ms, 'end_ms': None, 'words': []})
+    lines.sort(key=lambda x: x['start_ms'])
+    for i in range(len(lines)):
+        if i + 1 < len(lines):
+            lines[i]['end_ms'] = lines[i + 1]['start_ms']
+        else:
+            lines[i]['end_ms'] = lines[i]['start_ms'] + 5000
+    return lines
+
+def parse_yaml_lyrics(yaml_text):
+    try:
+        doc = yaml.safe_load(yaml_text)
+        if isinstance(doc, dict) and 'lines' in doc:
+            lines = []
+            for item in doc['lines']:
+                txt = str(item.get('text', '')).strip()
+                if not txt:
+                    continue
+                start_ms = int(item.get('start_ms', 0))
+                end_ms = int(item.get('end_ms', start_ms + 4000)) if 'end_ms' in item else None
+                words = item.get('words', [])
+                lines.append({
+                    'text': txt,
+                    'start_ms': start_ms,
+                    'end_ms': end_ms,
+                    'words': words
+                })
+            lines.sort(key=lambda x: x['start_ms'])
+            return lines
+    except Exception as e:
+        print(f"lyrics: error parsing yaml: {e}")
+    return None
+
+def fetch_online_lyrics(title, artist, duration_sec=0):
+    try:
+        params = {'track_name': title, 'artist_name': artist}
+        if duration_sec > 0:
+            params['duration'] = round(duration_sec)
+        query_str = urllib.parse.urlencode(params)
+        url = f"https://lrclib.net/api/get?{query_str}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'DiodESP-Lyrics/1.0'})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            if data.get('syncedLyrics'):
+                return parse_lrc(data['syncedLyrics'])
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            print(f"lyrics: lrclib get code {e.code}")
+    except Exception as e:
+        print(f"lyrics: lrclib get error {e}")
+
+    try:
+        q = urllib.parse.quote(f"{title} {artist}")
+        url = f"https://lrclib.net/api/search?q={q}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'DiodESP-Lyrics/1.0'})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            results = json.loads(resp.read().decode('utf-8'))
+            if isinstance(results, list):
+                for item in results:
+                    if item.get('syncedLyrics'):
+                        return parse_lrc(item['syncedLyrics'])
+    except Exception as e:
+        print(f"lyrics: lrclib search error {e}")
+
+    return None
+
+def fetch_lyrics(title, artist, duration_sec=0, track_url=None):
+    if track_url and track_url.startswith('file://'):
+        try:
+            local_path = urllib.parse.unquote(urllib.parse.urlparse(track_url).path)
+            base_path = os.path.splitext(local_path)[0]
+            for ext in ['.lyricsfile.yaml', '.yaml', '.yml']:
+                cand = base_path + ext
+                if os.path.exists(cand):
+                    with open(cand, 'r', encoding='utf-8') as f:
+                        lines = parse_yaml_lyrics(f.read())
+                        if lines:
+                            print(f"lyrics: loaded local yaml from {cand}")
+                            return lines
+            cand = base_path + '.lrc'
+            if os.path.exists(cand):
+                with open(cand, 'r', encoding='utf-8') as f:
+                    lines = parse_lrc(f.read())
+                    if lines:
+                        print(f"lyrics: loaded local lrc from {cand}")
+                        return lines
+        except Exception as e:
+            print(f"lyrics: local file check error {e}")
+
+    safe_title = "".join(c for c in title if c.isalnum() or c in " ._-").strip()
+    safe_artist = "".join(c for c in artist if c.isalnum() or c in " ._-").strip()
+
+    for d in LOCAL_LYRICS_DIRS:
+        if not os.path.exists(d):
+            continue
+        cand_names = [
+            f"{artist} - {title}.lyricsfile.yaml",
+            f"{safe_artist} - {safe_title}.lyricsfile.yaml",
+            f"{artist} - {title}.yaml",
+            f"{safe_artist} - {safe_title}.yaml",
+            f"{artist} - {title}.lrc",
+            f"{safe_artist} - {safe_title}.lrc",
+            f"{title}.lyricsfile.yaml",
+            f"{safe_title}.lyricsfile.yaml",
+            f"{title}.yaml",
+            f"{title}.lrc"
+        ]
+        for name in cand_names:
+            full = os.path.join(d, name)
+            if os.path.exists(full):
+                try:
+                    with open(full, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        if name.endswith('.yaml') or name.endswith('.yml'):
+                            lines = parse_yaml_lyrics(content)
+                        else:
+                            lines = parse_lrc(content)
+                        if lines:
+                            print(f"lyrics: loaded local lyrics from {full}")
+                            return lines
+                except Exception:
+                    pass
+
+    print(f"lyrics: fetching from lrclib for '{title} - {artist}'")
+    lines = fetch_online_lyrics(title, artist, duration_sec)
+    if lines:
+        print(f"lyrics: fetched {len(lines)} lines from lrclib")
+        try:
+            cache_file = os.path.join(CACHE_DIR, f"{safe_artist} - {safe_title}.lyricsfile.yaml")
+            yaml_content = {
+                'version': '1.0',
+                'metadata': {
+                    'title': title,
+                    'artist': artist,
+                    'duration_ms': round(duration_sec * 1000)
+                },
+                'lines': lines
+            }
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                yaml.dump(yaml_content, f, allow_unicode=True, sort_keys=False)
+            print(f"lyrics: cached to {cache_file}")
+        except Exception as e:
+            print(f"lyrics: cache write error {e}")
+        return lines
+
+    return None
+
+def update_lyrics_at_pos(pos_ms):
+    global current_lyric_tuple, lyrics_data
+    with lyrics_lock:
+        lines = lyrics_data
+
+    if lines is None:
+        return
+    if len(lines) == 0:
+        new_tuple = ("", "No lyric", "")
+        if new_tuple != current_lyric_tuple:
+            current_lyric_tuple = new_tuple
+            send_to_mcu("LYRIC:|No lyric|\n")
+        return
+
+    n = len(lines)
+    if pos_ms < lines[0]['start_ms']:
+        prev = ""
+        curr = "♪ ... ♪"
+        next_txt = lines[0]['text']
+    else:
+        idx = 0
+        for i in range(n):
+            if lines[i]['start_ms'] <= pos_ms:
+                idx = i
+            else:
+                break
+        curr_line = lines[idx]
+        if curr_line.get('end_ms') and pos_ms >= curr_line['end_ms']:
+            prev = curr_line['text']
+            curr = "♪ ... ♪"
+            next_txt = lines[idx + 1]['text'] if idx + 1 < n else ""
+        else:
+            prev = lines[idx - 1]['text'] if idx > 0 else ""
+            curr = curr_line['text']
+            next_txt = lines[idx + 1]['text'] if idx + 1 < n else ""
+
+    new_tuple = (prev, curr, next_txt)
+    if new_tuple != current_lyric_tuple:
+        current_lyric_tuple = new_tuple
+        clean_prev = clean_lyric_line(prev)
+        clean_curr = clean_lyric_line(curr)
+        clean_next = clean_lyric_line(next_txt)
+        send_to_mcu(f"LYRIC:{clean_prev}|{clean_curr}|{clean_next}\n")
+        print(f"lyrics: -> MCU: {clean_curr}")
+
+def poll_and_update_lyrics():
+    with lyrics_lock:
+        lines = lyrics_data
+    if lines is None:
+        send_to_mcu("LYRIC:|Searching lyrics...|\n")
+        return
+    if len(lines) == 0:
+        send_to_mcu("LYRIC:|No lyric|\n")
+        return
+    try:
+        get = get_mpris()
+        if get:
+            props = dbus.Interface(get, 'org.freedesktop.DBus.Properties')
+            pos_us = int(props.Get('org.mpris.MediaPlayer2.Player', 'Position'))
+            update_lyrics_at_pos(pos_us // 1000)
+        else:
+            update_lyrics_at_pos(0)
+    except Exception as e:
+        print(f"lyrics: poll error {e}")
+
+def fetch_lyrics_worker(title, artist, duration_sec, track_url):
+    global lyrics_data
+    lines = fetch_lyrics(title, artist, duration_sec, track_url)
+    with lyrics_lock:
+        lyrics_data = lines if lines is not None else []
+    if lines:
+        poll_and_update_lyrics()
+    else:
+        print(f"lyrics: no lyrics found for {title} - {artist}")
+        send_to_mcu("LYRIC:|No lyric|\n")
+
+def sync_lyrics_track(title, artist, duration_sec, track_url):
+    global last_lyrics_track, lyrics_data, current_lyric_tuple
+    if (title, artist) == last_lyrics_track:
+        return
+    last_lyrics_track = (title, artist)
+    with lyrics_lock:
+        lyrics_data = None
+        current_lyric_tuple = None
+
+    send_to_mcu("LYRIC:|Searching lyrics...|\n")
+    threading.Thread(target=fetch_lyrics_worker, args=(title, artist, duration_sec, track_url), daemon=True).start()
+
 def cleanup():
     print("cleaning up and notifying MCU...")
     try:
@@ -191,12 +463,16 @@ def listen():
                         send_cum(2)
                     case "QUERY" | "PING":
                         print("<- MCU: queried playing status -> re-syncing full state")
+                        current_lyric_tuple = None
                         sync_initial_mpris()
                     case "lyrics:open" | "lyrics":
                         print("<- MCU: opened lyrics view -> sync lyrics")
-                        send_to_mcu("LYRIC:• Previous lyric •|♪ Synchronized lyrics ready ♪|• Next lyric •\n")
+                        lyrics_view_active = True
+                        current_lyric_tuple = None
+                        poll_and_update_lyrics()
                     case "lyrics:close":
                         print("<- MCU: lyrics view closed")
+                        lyrics_view_active = False
                     case _:
                         print(f"unknown mcu line: {line}")
             else:
@@ -214,6 +490,7 @@ missed_player_count = 0
 
 def progress_loop():
     global had_player, missed_player_count, last_art_url
+    last_sec_tick = 0
     while True:
         try:
             get = get_mpris()
@@ -232,9 +509,16 @@ def progress_loop():
                     pos_us = int(props.Get('org.mpris.MediaPlayer2.Player', 'Position'))
                     len_us = int(metadata.get('mpris:length', 0))
 
-                    cur_sec = pos_us // 1000000
+                    pos_ms = pos_us // 1000
+                    cur_sec = pos_ms // 1000
                     total_sec = len_us // 1000000 if len_us > 0 else 0
-                    send_to_mcu(f"POS:{cur_sec}:{total_sec}\n")
+
+                    now = time.time()
+                    if now - last_sec_tick >= 1.0:
+                        last_sec_tick = now
+                        send_to_mcu(f"POS:{cur_sec}:{total_sec}\n")
+
+                    update_lyrics_at_pos(pos_ms)
             else:
                 if had_player:
                     missed_player_count += 1
@@ -249,9 +533,11 @@ def progress_loop():
                         send_to_mcu("STATUS:Idle\n")
                         send_to_mcu("POS:0:0\n")
                         send_to_mcu("IMG:CLEAR\n")
+                        send_to_mcu("LYRIC:|No lyric|\n")
         except Exception:
             pass
-        time.sleep(1.0)
+
+        time.sleep(0.2)
 
 threading.Thread(target=progress_loop, daemon=True).start()
 
@@ -359,6 +645,9 @@ def sync_initial_mpris():
         art_url = str(metadata.get('mpris:artUrl', ''))
         sync_art(art_url)
 
+        track_url = str(metadata.get('xesam:url', ''))
+        sync_lyrics_track(titit, artist, total_sec, track_url)
+
         print(f"synced current track: {titit} - {artist} ({status}) [{cur_sec}/{total_sec}s]")
     except Exception as e:
         print(f"could not sync initial mpris: {e}")
@@ -387,6 +676,9 @@ def on_properties_changed(interface, changed_properties, invalidated_properties,
 
         art_url = str(metadata.get('mpris:artUrl', ''))
         sync_art(art_url)
+
+        track_url = str(metadata.get('xesam:url', ''))
+        sync_lyrics_track(titit, artist, total_sec, track_url)
 
     if 'PlaybackStatus' in changed_properties:
         status = str(changed_properties['PlaybackStatus'])
