@@ -80,8 +80,8 @@ extern "C" {
       lcd.setSwapBytes(1);
       lv_display_t *disp = lv_display_create(480, 320);
       
-      alignas(4) static uint8_t sigma1[480 * 32 * sizeof(uint16_t)];
-      alignas(4) static uint8_t sigma2[480 * 32 * sizeof(uint16_t)];
+      alignas(4) static uint8_t sigma1[480 * 40 * sizeof(uint16_t)];
+      alignas(4) static uint8_t sigma2[480 * 40 * sizeof(uint16_t)];
       lv_display_set_buffers(disp,
                              sigma1,
                              sigma2, 

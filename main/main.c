@@ -7,6 +7,7 @@
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "tinyusb.h"
 #include "tinyusb_default_config.h"
 #include "tinyusb_cdc_acm.h"
@@ -27,7 +28,9 @@ uint8_t cdc_buffer[CDC_BUF_SIZE];
 
 static const char *DTAG = "CDC-DIODESP";
 
-const uint32_t renderCool = 16;
+static uint32_t lvgl_tick_cb(void) {
+    return (uint32_t)(esp_timer_get_time() / 1000ULL);
+}
 
 static SemaphoreHandle_t lvgl_mux = NULL;
 
@@ -1277,16 +1280,18 @@ void render(void *pvParameters) {
     create_eq_page(screen);
     switch_page(PAGE_MUSIC);
 
-    TickType_t last_tick = xTaskGetTickCount();
-    const TickType_t coolFreq = pdMS_TO_TICKS(renderCool);
-
     while (1) {
-        lv_tick_inc(renderCool);
+        uint32_t delay_ms = 10;
         if (lvgl_lock(20)) {
-            lv_timer_handler();
+            delay_ms = lv_timer_handler();
             lvgl_unlock();
         }
-        vTaskDelayUntil(&last_tick, coolFreq);
+        if (delay_ms == LV_NO_TIMER_READY || delay_ms > 20) {
+            delay_ms = 20;
+        } else if (delay_ms < 1) {
+            delay_ms = 1;
+        }
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
     }
 }
 
@@ -1294,7 +1299,10 @@ void app_main(void) {
     theme_init_base();
 
     if (!art_img_buf) {
-        art_img_buf = (uint8_t *)heap_caps_malloc(ART_MAX_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        art_img_buf = (uint8_t *)heap_caps_malloc(ART_MAX_BUFFER_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
+        if (!art_img_buf) {
+            art_img_buf = (uint8_t *)heap_caps_malloc(ART_MAX_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
         if (!art_img_buf) {
             art_img_buf = (uint8_t *)malloc(ART_MAX_BUFFER_SIZE);
         }
@@ -1302,6 +1310,7 @@ void app_main(void) {
 
     lvgl_mux = xSemaphoreCreateMutex();
     lv_init();
+    lv_tick_set_cb(lvgl_tick_cb);
     GF_to_LV();
 
     const tinyusb_config_t cdc_cfg = TINYUSB_DEFAULT_CONFIG(usb_event_callback, NULL);
@@ -1316,6 +1325,6 @@ void app_main(void) {
     };
     ESP_ERROR_CHECK(tinyusb_cdcacm_init(&amc_cfg));
 
-    xTaskCreatePinnedToCore(&render, "render_disp", 8192, NULL, 5, NULL, 0);
-    xTaskCreatePinnedToCore(&button_task, "button_task", 4096, NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore(&render, "render_disp", 8192, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(&button_task, "button_task", 4096, NULL, 4, NULL, 0);
 }
