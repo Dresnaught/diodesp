@@ -17,6 +17,7 @@ baud = 115200
 ser = None
 ser_lock = threading.Lock()
 last_art_url = None
+ART_IMG_DIM = 130
 
 def clean_mpris_text(text):
     if not text:
@@ -79,10 +80,10 @@ def convert_art_to_rgb565(art_url):
         left = (w - min_dim) // 2
         top = (h - min_dim) // 2
         img = img.crop((left, top, left + min_dim, top + min_dim))
-        img = img.resize((130, 130), Image.Resampling.LANCZOS)
+        img = img.resize((ART_IMG_DIM, ART_IMG_DIM), Image.Resampling.LANCZOS)
 
         raw = img.tobytes()
-        out = bytearray(130 * 130 * 2)
+        out = bytearray(ART_IMG_DIM * ART_IMG_DIM * 2)
         j = 0
         for i in range(0, len(raw), 3):
             r, g, b = raw[i], raw[i+1], raw[i+2]
@@ -191,6 +192,11 @@ def listen():
                     case "QUERY" | "PING":
                         print("<- MCU: queried playing status -> re-syncing full state")
                         sync_initial_mpris()
+                    case "lyrics:open" | "lyrics":
+                        print("<- MCU: opened lyrics view -> sync lyrics")
+                        send_to_mcu("LYRIC:• Previous lyric •|♪ Synchronized lyrics ready ♪|• Next lyric •\n")
+                    case "lyrics:close":
+                        print("<- MCU: lyrics view closed")
                     case _:
                         print(f"unknown mcu line: {line}")
             else:
@@ -300,6 +306,9 @@ def debug_cli():
                     data = convert_art_to_rgb565(target)
                     if data:
                         send_image_to_mcu(data)
+            elif cmd.startswith('lyric '):
+                lyric_txt = cmd[6:].strip()
+                send_to_mcu(f"LYRIC:{lyric_txt}\n")
             elif cmd == 'reset':
                 send_to_mcu("HOST:DISCONNECTED\n")
             elif cmd == 'q':
