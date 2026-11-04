@@ -17,7 +17,7 @@ baud = 115200
 ser = None
 ser_lock = threading.Lock()
 last_art_url = None
-ART_IMG_DIM = 130
+ART_IMG_DIM = 160
 
 def clean_mpris_text(text):
     if not text:
