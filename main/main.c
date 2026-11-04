@@ -778,7 +778,7 @@ static void create_music_page(lv_obj_t *parent) {
     lv_obj_set_style_text_color(label_lyric_prev, theme.text_dim, 0);
     lv_obj_set_style_text_align(label_lyric_prev, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(label_lyric_prev, 260);
-    lv_obj_set_pos(label_lyric_prev, 4, 6);
+    lv_obj_set_pos(label_lyric_prev, 4, 18);
     lv_label_set_long_mode(label_lyric_prev, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
     label_lyric_curr = lv_label_create(lyric_box);
@@ -787,7 +787,7 @@ static void create_music_page(lv_obj_t *parent) {
     lv_obj_set_style_text_color(label_lyric_curr, theme.accent_primary, 0);
     lv_obj_set_style_text_align(label_lyric_curr, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(label_lyric_curr, 260);
-    lv_obj_set_pos(label_lyric_curr, 4, 52);
+    lv_obj_set_pos(label_lyric_curr, 4, 66);
     lv_label_set_long_mode(label_lyric_curr, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
     label_lyric_next = lv_label_create(lyric_box);
@@ -796,7 +796,7 @@ static void create_music_page(lv_obj_t *parent) {
     lv_obj_set_style_text_color(label_lyric_next, theme.text_dim, 0);
     lv_obj_set_style_text_align(label_lyric_next, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(label_lyric_next, 260);
-    lv_obj_set_pos(label_lyric_next, 4, 118);
+    lv_obj_set_pos(label_lyric_next, 4, 114);
     lv_label_set_long_mode(label_lyric_next, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
     // Album Art container
@@ -828,7 +828,7 @@ static void create_music_page(lv_obj_t *parent) {
     lv_label_set_text(label_title, "Waiting for MPRIS...");
     lv_obj_set_style_text_font(label_title, &font_title, 0);
     lv_obj_set_style_text_color(label_title, theme.text_title, 0);
-    lv_obj_set_pos(label_title, 200, 50);
+    lv_obj_set_pos(label_title, 200, 54);
     lv_obj_set_width(label_title, 260);
     lv_label_set_long_mode(label_title, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
@@ -836,7 +836,7 @@ static void create_music_page(lv_obj_t *parent) {
     lv_label_set_text(label_artist, "Python script not initiated");
     lv_obj_set_style_text_font(label_artist, &font_sub, 0);
     lv_obj_set_style_text_color(label_artist, theme.text_muted, 0);
-    lv_obj_set_pos(label_artist, 200, 84);
+    lv_obj_set_pos(label_artist, 200, 80);
     lv_obj_set_width(label_artist, 260);
     lv_label_set_long_mode(label_artist, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
@@ -1305,7 +1305,7 @@ static void button_task(void *pvParameters) {
 }
 
 void render(void *pvParameters) {
-    font_title = lv_font_montserrat_24;
+    font_title = lv_font_montserrat_14;
     font_sub = lv_font_montserrat_14;
 
 #if CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_14_CJK
