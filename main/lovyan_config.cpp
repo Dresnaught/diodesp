@@ -15,7 +15,7 @@ public:
       auto cfg = _bus_instance.config();
       cfg.spi_host = SPI2_HOST;
       cfg.spi_mode = 0;
-      cfg.freq_write = 40000000;
+      cfg.freq_write = 60000000; // if u read dis, and somtin dont work, change it to 40mhz
       cfg.freq_read  = 5000000; 
       cfg.pin_sclk   = 12;  // SCLK pin
       cfg.pin_mosi = 11; // MOSI pin
@@ -65,6 +65,7 @@ extern "C" {
     int32_t w = (area->x2 - area->x1) + 1;
     int32_t h = (area->y2 - area->y1) + 1;
 
+    lcd.waitDMA();
     lcd.pushImageDMA(x, y, w, h, (uint16_t *)px_map);
 
     lv_display_flush_ready(disp);
@@ -79,10 +80,11 @@ extern "C" {
       lcd.setSwapBytes(1);
       lv_display_t *disp = lv_display_create(480, 320);
       
-      static uint8_t sigma1[480 * 32 *sizeof(uint16_t)];
+      alignas(4) static uint8_t sigma1[480 * 40 * sizeof(uint16_t)];
+      alignas(4) static uint8_t sigma2[480 * 40 * sizeof(uint16_t)];
       lv_display_set_buffers(disp,
                              sigma1,
-                             NULL, 
+                             sigma2, 
                              sizeof(sigma1), 
                              LV_DISPLAY_RENDER_MODE_PARTIAL
                             );
