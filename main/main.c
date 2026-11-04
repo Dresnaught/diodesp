@@ -83,41 +83,39 @@ typedef enum {
     PAGE_COUNT
 } app_page_t;
 
+typedef enum {
+    VIEW_STANDARD = 0,
+    VIEW_LYRICS
+} player_view_t;
+
 static lv_obj_t *pages[PAGE_COUNT] = {NULL};
 static app_page_t active_page = PAGE_MUSIC;
+static player_view_t current_view = VIEW_STANDARD;
+static int32_t current_morph_val = 0;
+static bool morph_anim_running = false;
 
 // Input groups for 3-button navigation
 static lv_group_t *music_group = NULL;
-static lv_group_t *lyric_group = NULL;
 static lv_group_t *eq_group = NULL;
 static lv_group_t *menu_group = NULL;
 static lv_group_t *active_group = NULL;
 
-// Music page UI elements
+// Unified music & lyrics player UI elements
 static lv_obj_t *label_title = NULL;
 static lv_obj_t *label_artist = NULL;
 static lv_obj_t *label_status = NULL;
 static lv_obj_t *label_play_icon = NULL;
 static lv_obj_t *bar_progress = NULL;
 static lv_obj_t *label_time = NULL;
+static lv_obj_t *btn_prev = NULL;
 static lv_obj_t *btn_play_obj = NULL;
+static lv_obj_t *btn_next = NULL;
 static lv_obj_t *btn_lyric_obj = NULL;
+static lv_obj_t *btn_menu = NULL;
 static lv_obj_t *hint_label = NULL;
+static lv_obj_t *art_box = NULL;
 static lv_obj_t *art_img = NULL;
 static lv_obj_t *art_lbl = NULL;
-
-// Lyrics page UI elements (Lyrics view with bottom-left shrunk art)
-static lv_obj_t *label_title_lyric = NULL;
-static lv_obj_t *label_artist_lyric = NULL;
-static lv_obj_t *label_status_lyric = NULL;
-static lv_obj_t *label_play_icon_lyric = NULL;
-static lv_obj_t *bar_progress_lyric = NULL;
-static lv_obj_t *label_time_lyric = NULL;
-static lv_obj_t *btn_play_lyric = NULL;
-static lv_obj_t *btn_lyric_toggle = NULL;
-static lv_obj_t *hint_label_lyric = NULL;
-static lv_obj_t *art_img_lyric = NULL;
-static lv_obj_t *art_lbl_lyric = NULL;
 
 static lv_obj_t *lyric_box = NULL;
 static lv_obj_t *label_lyric_prev = NULL;
@@ -177,6 +175,8 @@ static bool menu_is_open = false;
 
 void open_menu_popup(void);
 void close_menu_popup(void);
+void start_view_morph(player_view_t target_view, bool animate);
+void switch_page(app_page_t page);
 
 void set_hint_visible(bool show) {
     if (hint_visible == show) return;
@@ -189,42 +189,161 @@ void set_hint_visible(bool show) {
             lv_obj_add_flag(hint_label, LV_OBJ_FLAG_HIDDEN);
         }
     }
-    if (hint_label_lyric) {
-        if (show) {
-            lv_obj_remove_flag(hint_label_lyric, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(hint_label_lyric, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
 
     lv_style_set_outline_opa(&style_focus, show ? LV_OPA_COVER : LV_OPA_0);
     lv_obj_report_style_change(&style_focus);
 }
 
-void switch_page(app_page_t page) {
-    if (page >= PAGE_COUNT) return;
-    for (int i = 0; i < PAGE_COUNT; i++) {
-        if (pages[i]) {
-            if (i == page) {
-                lv_obj_remove_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
-            } else {
-                lv_obj_add_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
-            }
+static inline int32_t morph_lerp(int32_t a, int32_t b, int32_t progress) {
+    return a + ((b - a) * progress) / 1000;
+}
+
+static void apply_morph(int32_t progress) {
+    current_morph_val = progress;
+
+    // Album art container & image
+    if (art_box && art_img) {
+        int32_t art_y = morph_lerp(50, 240, progress);
+        int32_t art_size = morph_lerp(130, 70, progress);
+        int32_t art_radius = morph_lerp(12, 10, progress);
+        lv_obj_set_pos(art_box, 20, art_y);
+        lv_obj_set_size(art_box, art_size, art_size);
+        lv_obj_set_style_radius(art_box, art_radius, 0);
+        lv_obj_set_size(art_img, art_size, art_size);
+        lv_obj_center(art_img);
+    }
+
+    // Title and Artist
+    if (label_title) {
+        lv_obj_set_pos(label_title, morph_lerp(168, 20, progress), morph_lerp(50, 40, progress));
+        lv_obj_set_width(label_title, morph_lerp(290, 440, progress));
+    }
+    if (label_artist) {
+        lv_obj_set_pos(label_artist, morph_lerp(168, 20, progress), morph_lerp(86, 68, progress));
+        lv_obj_set_width(label_artist, morph_lerp(290, 440, progress));
+    }
+
+    // Progress bar
+    if (bar_progress) {
+        lv_obj_set_pos(bar_progress, morph_lerp(168, 20, progress), morph_lerp(122, 218, progress));
+        lv_obj_set_size(bar_progress, morph_lerp(290, 440, progress), 6);
+    }
+
+    // Time label (glides smoothly from under progress bar in standard view to right-edge in lyric view)
+    if (label_time) {
+        lv_obj_set_pos(label_time, morph_lerp(168, 375, progress), morph_lerp(138, 226, progress));
+    }
+
+    // Playback control buttons
+    if (btn_prev) {
+        lv_obj_set_pos(btn_prev, morph_lerp(96, 175, progress), morph_lerp(222, 254, progress));
+        lv_obj_set_size(btn_prev, morph_lerp(56, 44, progress), morph_lerp(46, 38, progress));
+        lv_obj_set_style_radius(btn_prev, morph_lerp(23, 19, progress), 0);
+    }
+
+    if (btn_play_obj) {
+        int32_t play_size = morph_lerp(64, 52, progress);
+        lv_obj_set_pos(btn_play_obj, morph_lerp(168, 231, progress), morph_lerp(213, 247, progress));
+        lv_obj_set_size(btn_play_obj, play_size, play_size);
+        lv_obj_set_style_radius(btn_play_obj, play_size / 2, 0);
+    }
+
+    if (btn_next) {
+        lv_obj_set_pos(btn_next, morph_lerp(248, 295, progress), morph_lerp(222, 254, progress));
+        lv_obj_set_size(btn_next, morph_lerp(56, 44, progress), morph_lerp(46, 38, progress));
+        lv_obj_set_style_radius(btn_next, morph_lerp(23, 19, progress), 0);
+    }
+
+    if (btn_lyric_obj) {
+        lv_obj_set_pos(btn_lyric_obj, morph_lerp(320, 351, progress), morph_lerp(222, 254, progress));
+        lv_obj_set_size(btn_lyric_obj, morph_lerp(56, 44, progress), morph_lerp(46, 38, progress));
+        lv_obj_set_style_radius(btn_lyric_obj, morph_lerp(23, 19, progress), 0);
+    }
+
+    // Lyric box: fades up and slides into position
+    if (lyric_box) {
+        if (progress == 0) {
+            lv_obj_add_flag(lyric_box, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(lyric_box, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_pos(lyric_box, 20, morph_lerp(110, 94, progress));
+            lv_obj_set_style_opa(lyric_box, (lv_opa_t)morph_lerp(0, LV_OPA_COVER, progress), 0);
         }
     }
+}
+
+static void morph_anim_exec_cb(lv_anim_t *a, int32_t val) {
+    apply_morph(val);
+}
+
+static void morph_anim_completed_cb(lv_anim_t *a) {
+    morph_anim_running = false;
+}
+
+void start_view_morph(player_view_t target_view, bool animate) {
+    if (current_view == target_view && !morph_anim_running) {
+        return;
+    }
+    current_view = target_view;
+    active_page = (target_view == VIEW_LYRICS) ? PAGE_LYRICS : PAGE_MUSIC;
+    int32_t target_val = (target_view == VIEW_LYRICS) ? 1000 : 0;
+
+    if (!animate) {
+        lv_anim_delete(&current_morph_val, NULL);
+        morph_anim_running = false;
+        apply_morph(target_val);
+        return;
+    }
+
+    lv_anim_delete(&current_morph_val, NULL);
+    morph_anim_running = true;
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, &current_morph_val);
+    lv_anim_set_values(&a, current_morph_val, target_val);
+    lv_anim_set_duration(&a, 350);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_set_custom_exec_cb(&a, morph_anim_exec_cb);
+    lv_anim_set_completed_cb(&a, morph_anim_completed_cb);
+    lv_anim_start(&a);
+}
+
+void switch_page(app_page_t page) {
+    if (page >= PAGE_COUNT) return;
     active_page = page;
 
-    if (page == PAGE_MUSIC && music_group) {
+    if (page == PAGE_MUSIC) {
+        if (pages[PAGE_EQ]) {
+            lv_obj_add_flag(pages[PAGE_EQ], LV_OBJ_FLAG_HIDDEN);
+        }
+        if (pages[PAGE_MUSIC]) {
+            lv_obj_remove_flag(pages[PAGE_MUSIC], LV_OBJ_FLAG_HIDDEN);
+        }
         active_group = music_group;
+        start_view_morph(VIEW_STANDARD, true);
         if (btn_play_obj) {
             lv_group_focus_obj(btn_play_obj);
         }
-    } else if (page == PAGE_LYRICS && lyric_group) {
-        active_group = lyric_group;
-        if (btn_play_lyric) {
-            lv_group_focus_obj(btn_play_lyric);
+    } else if (page == PAGE_LYRICS) {
+        if (pages[PAGE_EQ]) {
+            lv_obj_add_flag(pages[PAGE_EQ], LV_OBJ_FLAG_HIDDEN);
         }
-    } else if (page == PAGE_EQ && eq_group) {
+        if (pages[PAGE_MUSIC]) {
+            lv_obj_remove_flag(pages[PAGE_MUSIC], LV_OBJ_FLAG_HIDDEN);
+        }
+        active_group = music_group;
+        start_view_morph(VIEW_LYRICS, true);
+        if (btn_play_obj) {
+            lv_group_focus_obj(btn_play_obj);
+        }
+    } else if (page == PAGE_EQ) {
+        if (pages[PAGE_MUSIC]) {
+            lv_obj_add_flag(pages[PAGE_MUSIC], LV_OBJ_FLAG_HIDDEN);
+        }
+        if (pages[PAGE_EQ]) {
+            lv_obj_remove_flag(pages[PAGE_EQ], LV_OBJ_FLAG_HIDDEN);
+        }
         active_group = eq_group;
     }
 }
@@ -254,12 +373,6 @@ void ui_music_set_image(const uint8_t *data, uint16_t w, uint16_t h) {
         lv_obj_remove_flag(art_img, LV_OBJ_FLAG_HIDDEN);
         lv_obj_invalidate(art_img);
     }
-    if (art_img_lyric && art_lbl_lyric) {
-        lv_image_set_src(art_img_lyric, &art_img_dsc);
-        lv_obj_add_flag(art_lbl_lyric, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(art_img_lyric, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_invalidate(art_img_lyric);
-    }
 }
 
 void ui_music_clear_image(void) {
@@ -268,12 +381,6 @@ void ui_music_clear_image(void) {
     }
     if (art_lbl) {
         lv_obj_remove_flag(art_lbl, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (art_img_lyric) {
-        lv_obj_add_flag(art_img_lyric, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (art_lbl_lyric) {
-        lv_obj_remove_flag(art_lbl_lyric, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -300,44 +407,23 @@ void ui_music_reset_default(void) {
     if (label_title) {
         lv_label_set_text(label_title, "Waiting for MPRIS...");
     }
-    if (label_title_lyric) {
-        lv_label_set_text(label_title_lyric, "Waiting for MPRIS...");
-    }
     if (label_artist) {
         lv_label_set_text(label_artist, "Python script not initiated");
         lv_obj_set_style_text_color(label_artist, theme.text_muted, 0);
-    }
-    if (label_artist_lyric) {
-        lv_label_set_text(label_artist_lyric, "Python script not initiated");
-        lv_obj_set_style_text_color(label_artist_lyric, theme.text_muted, 0);
     }
     if (label_status) {
         lv_label_set_text(label_status, "DISCONNECTED");
         lv_obj_set_style_text_color(label_status, theme.text_muted, 0);
     }
-    if (label_status_lyric) {
-        lv_label_set_text(label_status_lyric, "DISCONNECTED");
-        lv_obj_set_style_text_color(label_status_lyric, theme.text_muted, 0);
-    }
     if (label_play_icon) {
         lv_label_set_text(label_play_icon, LV_SYMBOL_PLAY);
-    }
-    if (label_play_icon_lyric) {
-        lv_label_set_text(label_play_icon_lyric, LV_SYMBOL_PLAY);
     }
     if (bar_progress) {
         lv_bar_set_range(bar_progress, 0, 100);
         lv_bar_set_value(bar_progress, 0, LV_ANIM_OFF);
     }
-    if (bar_progress_lyric) {
-        lv_bar_set_range(bar_progress_lyric, 0, 100);
-        lv_bar_set_value(bar_progress_lyric, 0, LV_ANIM_OFF);
-    }
     if (label_time) {
         lv_label_set_text(label_time, "00:00 / 00:00");
-    }
-    if (label_time_lyric) {
-        lv_label_set_text(label_time_lyric, "00:00 / 00:00");
     }
     ui_music_set_lyrics("• [Previous Lyric Line] •",
                         "♪ Synchronized lyrics will display here ♪",
@@ -350,17 +436,9 @@ void ui_music_set_connected(bool connected) {
             lv_label_set_text(label_status, "CONNECTED");
             lv_obj_set_style_text_color(label_status, theme.accent_secondary, 0);
         }
-        if (label_status_lyric) {
-            lv_label_set_text(label_status_lyric, "CONNECTED");
-            lv_obj_set_style_text_color(label_status_lyric, theme.accent_secondary, 0);
-        }
         if (label_artist) {
             lv_label_set_text(label_artist, "Waiting for media player...");
             lv_obj_set_style_text_color(label_artist, theme.text_secondary, 0);
-        }
-        if (label_artist_lyric) {
-            lv_label_set_text(label_artist_lyric, "Waiting for media player...");
-            lv_obj_set_style_text_color(label_artist_lyric, theme.text_secondary, 0);
         }
     } else {
         ui_music_reset_default();
@@ -372,9 +450,6 @@ void ui_music_set_title(const char *title) {
     if (label_title) {
         lv_label_set_text(label_title, title);
     }
-    if (label_title_lyric) {
-        lv_label_set_text(label_title_lyric, title);
-    }
 }
 
 void ui_music_set_artist(const char *artist) {
@@ -382,10 +457,6 @@ void ui_music_set_artist(const char *artist) {
     if (label_artist) {
         lv_label_set_text(label_artist, artist);
         lv_obj_set_style_text_color(label_artist, theme.accent_primary, 0);
-    }
-    if (label_artist_lyric) {
-        lv_label_set_text(label_artist_lyric, artist);
-        lv_obj_set_style_text_color(label_artist_lyric, theme.accent_primary, 0);
     }
 }
 
@@ -395,10 +466,6 @@ void ui_music_set_progress(int cur_sec, int total_sec) {
             lv_bar_set_range(bar_progress, 0, total_sec);
             lv_bar_set_value(bar_progress, cur_sec, LV_ANIM_OFF);
         }
-        if (bar_progress_lyric) {
-            lv_bar_set_range(bar_progress_lyric, 0, total_sec);
-            lv_bar_set_value(bar_progress_lyric, cur_sec, LV_ANIM_OFF);
-        }
         char time_str[32];
         snprintf(time_str, sizeof(time_str), "%02d:%02d / %02d:%02d",
                  cur_sec / 60, cur_sec % 60,
@@ -406,21 +473,12 @@ void ui_music_set_progress(int cur_sec, int total_sec) {
         if (label_time) {
             lv_label_set_text(label_time, time_str);
         }
-        if (label_time_lyric) {
-            lv_label_set_text(label_time_lyric, time_str);
-        }
     } else {
         if (bar_progress) {
             lv_bar_set_value(bar_progress, 0, LV_ANIM_OFF);
         }
-        if (bar_progress_lyric) {
-            lv_bar_set_value(bar_progress_lyric, 0, LV_ANIM_OFF);
-        }
         if (label_time) {
             lv_label_set_text(label_time, "00:00 / 00:00");
-        }
-        if (label_time_lyric) {
-            lv_label_set_text(label_time_lyric, "00:00 / 00:00");
         }
     }
 }
@@ -445,15 +503,8 @@ void ui_music_set_status(const char *status) {
         lv_label_set_text(label_status, text);
         lv_obj_set_style_text_color(label_status, col, 0);
     }
-    if (label_status_lyric) {
-        lv_label_set_text(label_status_lyric, text);
-        lv_obj_set_style_text_color(label_status_lyric, col, 0);
-    }
     if (label_play_icon) {
         lv_label_set_text(label_play_icon, icon);
-    }
-    if (label_play_icon_lyric) {
-        lv_label_set_text(label_play_icon_lyric, icon);
     }
 }
 
@@ -465,11 +516,11 @@ static void btn_mpris_event_cb(lv_event_t *e) {
 }
 
 static void btn_lyric_toggle_cb(lv_event_t *e) {
-    if (active_page == PAGE_MUSIC) {
-        switch_page(PAGE_LYRICS);
+    if (current_view == VIEW_STANDARD) {
+        start_view_morph(VIEW_LYRICS, true);
         send_cdc_cmd("lyrics:open\n");
     } else {
-        switch_page(PAGE_MUSIC);
+        start_view_morph(VIEW_STANDARD, true);
         send_cdc_cmd("lyrics:close\n");
     }
 }
@@ -612,10 +663,8 @@ void close_menu_popup(void) {
     }
     menu_is_open = false;
 
-    if (active_page == PAGE_MUSIC && music_group) {
+    if ((active_page == PAGE_MUSIC || active_page == PAGE_LYRICS) && music_group) {
         active_group = music_group;
-    } else if (active_page == PAGE_LYRICS && lyric_group) {
-        active_group = lyric_group;
     } else if (active_page == PAGE_EQ && eq_group) {
         active_group = eq_group;
     }
@@ -623,6 +672,7 @@ void close_menu_popup(void) {
 
 static void create_music_page(lv_obj_t *parent) {
     pages[PAGE_MUSIC] = lv_obj_create(parent);
+    pages[PAGE_LYRICS] = pages[PAGE_MUSIC];
     lv_obj_t *page = pages[PAGE_MUSIC];
     lv_obj_set_size(page, 480, 320);
     lv_obj_set_pos(page, 0, 0);
@@ -646,7 +696,7 @@ static void create_music_page(lv_obj_t *parent) {
     lv_obj_set_pos(label_status, 110, 12);
 
     // Menu button
-    lv_obj_t *btn_menu = lv_button_create(page);
+    btn_menu = lv_button_create(page);
     lv_obj_set_size(btn_menu, 90, 26);
     lv_obj_set_pos(btn_menu, 370, 8);
     lv_obj_set_style_bg_color(btn_menu, theme.bg_btn_subtle, 0);
@@ -667,8 +717,46 @@ static void create_music_page(lv_obj_t *parent) {
     lv_obj_set_style_bg_color(line, theme.divider, 0);
     lv_obj_set_style_border_width(line, 0, 0);
 
+    // Lyrics container (Middle section, animated during morph)
+    lyric_box = lv_obj_create(page);
+    lv_obj_set_size(lyric_box, 440, 116);
+    lv_obj_set_pos(lyric_box, 20, 110);
+    lv_obj_set_style_bg_opa(lyric_box, LV_OPA_0, 0);
+    lv_obj_set_style_border_width(lyric_box, 0, 0);
+    lv_obj_set_style_pad_all(lyric_box, 6, 0);
+    lv_obj_set_style_opa(lyric_box, LV_OPA_0, 0);
+    lv_obj_remove_flag(lyric_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(lyric_box, LV_OBJ_FLAG_HIDDEN);
+
+    label_lyric_prev = lv_label_create(lyric_box);
+    lv_label_set_text(label_lyric_prev, "• [Previous Lyric Line] •");
+    lv_obj_set_style_text_font(label_lyric_prev, &font_sub, 0);
+    lv_obj_set_style_text_color(label_lyric_prev, theme.text_dim, 0);
+    lv_obj_set_style_text_align(label_lyric_prev, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(label_lyric_prev, 424);
+    lv_obj_set_pos(label_lyric_prev, 2, 8);
+    lv_label_set_long_mode(label_lyric_prev, LV_LABEL_LONG_SCROLL_CIRCULAR);
+
+    label_lyric_curr = lv_label_create(lyric_box);
+    lv_label_set_text(label_lyric_curr, "♪ Synchronized lyrics will display here ♪");
+    lv_obj_set_style_text_font(label_lyric_curr, &font_title, 0);
+    lv_obj_set_style_text_color(label_lyric_curr, theme.accent_primary, 0);
+    lv_obj_set_style_text_align(label_lyric_curr, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(label_lyric_curr, 424);
+    lv_obj_set_pos(label_lyric_curr, 2, 40);
+    lv_label_set_long_mode(label_lyric_curr, LV_LABEL_LONG_SCROLL_CIRCULAR);
+
+    label_lyric_next = lv_label_create(lyric_box);
+    lv_label_set_text(label_lyric_next, "• [Next Lyric Line] •");
+    lv_obj_set_style_text_font(label_lyric_next, &font_sub, 0);
+    lv_obj_set_style_text_color(label_lyric_next, theme.text_dim, 0);
+    lv_obj_set_style_text_align(label_lyric_next, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(label_lyric_next, 424);
+    lv_obj_set_pos(label_lyric_next, 2, 82);
+    lv_label_set_long_mode(label_lyric_next, LV_LABEL_LONG_SCROLL_CIRCULAR);
+
     // Album Art container
-    lv_obj_t *art_box = lv_obj_create(page);
+    art_box = lv_obj_create(page);
     lv_obj_set_size(art_box, 130, 130);
     lv_obj_set_pos(art_box, 20, 50);
     lv_obj_set_style_bg_color(art_box, theme.bg_card, 0);
@@ -687,6 +775,7 @@ static void create_music_page(lv_obj_t *parent) {
 
     art_img = lv_image_create(art_box);
     lv_obj_set_size(art_img, 130, 130);
+    lv_image_set_inner_align(art_img, LV_IMAGE_ALIGN_STRETCH);
     lv_obj_center(art_img);
     lv_obj_add_flag(art_img, LV_OBJ_FLAG_HIDDEN);
 
@@ -725,7 +814,7 @@ static void create_music_page(lv_obj_t *parent) {
     lv_obj_set_pos(label_time, 168, 138);
 
     // Playback control buttons + Lyric button (Lower section)
-    lv_obj_t *btn_prev = lv_button_create(page);
+    btn_prev = lv_button_create(page);
     lv_obj_set_size(btn_prev, 56, 46);
     lv_obj_set_pos(btn_prev, 96, 222);
     lv_obj_set_style_bg_color(btn_prev, theme.bg_btn, 0);
@@ -750,7 +839,7 @@ static void create_music_page(lv_obj_t *parent) {
     lv_obj_set_style_text_color(label_play_icon, theme.text_inverse, 0);
     lv_obj_center(label_play_icon);
 
-    lv_obj_t *btn_next = lv_button_create(page);
+    btn_next = lv_button_create(page);
     lv_obj_set_size(btn_next, 56, 46);
     lv_obj_set_pos(btn_next, 248, 222);
     lv_obj_set_style_bg_color(btn_next, theme.bg_btn, 0);
@@ -793,220 +882,8 @@ static void create_music_page(lv_obj_t *parent) {
 
     lv_group_focus_obj(btn_play_obj);
     active_group = music_group;
-}
 
-static void create_lyrics_page(lv_obj_t *parent) {
-    pages[PAGE_LYRICS] = lv_obj_create(parent);
-    lv_obj_t *page = pages[PAGE_LYRICS];
-    lv_obj_set_size(page, 480, 320);
-    lv_obj_set_pos(page, 0, 0);
-    lv_obj_set_style_bg_opa(page, LV_OPA_0, 0);
-    lv_obj_set_style_border_width(page, 0, 0);
-    lv_obj_set_style_radius(page, 0, 0);
-    lv_obj_set_style_pad_all(page, 0, 0);
-    lv_obj_remove_flag(page, LV_OBJ_FLAG_SCROLLABLE);
-
-    lyric_group = lv_group_create();
-
-    // Header
-    lv_obj_t *header_label = lv_label_create(page);
-    lv_label_set_text(header_label, "DIODESP");
-    lv_obj_set_style_text_color(header_label, theme.accent_primary, 0);
-    lv_obj_set_pos(header_label, 20, 12);
-
-    label_status_lyric = lv_label_create(page);
-    lv_label_set_text(label_status_lyric, "DISCONNECTED");
-    lv_obj_set_style_text_color(label_status_lyric, theme.text_muted, 0);
-    lv_obj_set_pos(label_status_lyric, 175, 12);
-
-    // Menu button on Lyrics page
-    lv_obj_t *btn_menu_lyric = lv_button_create(page);
-    lv_obj_set_size(btn_menu_lyric, 90, 26);
-    lv_obj_set_pos(btn_menu_lyric, 350, 8);
-    lv_obj_set_style_bg_color(btn_menu_lyric, theme.bg_btn_subtle, 0);
-    lv_obj_set_style_border_width(btn_menu_lyric, 1, 0);
-    lv_obj_set_style_border_color(btn_menu_lyric, theme.border_subtle, 0);
-    lv_obj_set_style_radius(btn_menu_lyric, 13, 0);
-    lv_obj_add_style(btn_menu_lyric, &style_focus, LV_STATE_FOCUSED);
-    lv_obj_add_event_cb(btn_menu_lyric, btn_menu_event_cb, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *btn_menu_lbl = lv_label_create(btn_menu_lyric);
-    lv_label_set_text(btn_menu_lbl, LV_SYMBOL_LIST " MENU");
-    lv_obj_center(btn_menu_lbl);
-
-    // Separator line
-    lv_obj_t *line = lv_obj_create(page);
-    lv_obj_set_size(line, 440, 1);
-    lv_obj_set_pos(line, 20, 38);
-    lv_obj_set_style_bg_color(line, theme.divider, 0);
-    lv_obj_set_style_border_width(line, 0, 0);
-
-    // Title and Artist
-    label_title_lyric = lv_label_create(page);
-    lv_label_set_text(label_title_lyric, "Waiting for MPRIS...");
-    lv_obj_set_style_text_font(label_title_lyric, &font_title, 0);
-    lv_obj_set_style_text_color(label_title_lyric, theme.text_title, 0);
-    lv_obj_set_pos(label_title_lyric, 20, 40);
-    lv_obj_set_width(label_title_lyric, 440);
-    lv_label_set_long_mode(label_title_lyric, LV_LABEL_LONG_SCROLL_CIRCULAR);
-
-    label_artist_lyric = lv_label_create(page);
-    lv_label_set_text(label_artist_lyric, "Python script not initiated");
-    lv_obj_set_style_text_font(label_artist_lyric, &font_sub, 0);
-    lv_obj_set_style_text_color(label_artist_lyric, theme.text_muted, 0);
-    lv_obj_set_pos(label_artist_lyric, 20, 68);
-    lv_obj_set_width(label_artist_lyric, 440);
-    lv_label_set_long_mode(label_artist_lyric, LV_LABEL_LONG_SCROLL_CIRCULAR);
-
-    // Lyrics container (Middle section)
-    lyric_box = lv_obj_create(page);
-    lv_obj_set_size(lyric_box, 440, 116);
-    lv_obj_set_pos(lyric_box, 20, 94);
-    lv_obj_set_style_bg_opa(lyric_box, LV_OPA_0, 0);
-    lv_obj_set_style_border_width(lyric_box, 0, 0);
-    lv_obj_set_style_pad_all(lyric_box, 6, 0);
-    lv_obj_remove_flag(lyric_box, LV_OBJ_FLAG_SCROLLABLE);
-
-    label_lyric_prev = lv_label_create(lyric_box);
-    lv_label_set_text(label_lyric_prev, "• [Previous Lyric Line] •");
-    lv_obj_set_style_text_font(label_lyric_prev, &font_sub, 0);
-    lv_obj_set_style_text_color(label_lyric_prev, theme.text_dim, 0);
-    lv_obj_set_style_text_align(label_lyric_prev, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(label_lyric_prev, 424);
-    lv_obj_set_pos(label_lyric_prev, 2, 8);
-    lv_label_set_long_mode(label_lyric_prev, LV_LABEL_LONG_SCROLL_CIRCULAR);
-
-    label_lyric_curr = lv_label_create(lyric_box);
-    lv_label_set_text(label_lyric_curr, "♪ Synchronized lyrics will display here ♪");
-    lv_obj_set_style_text_font(label_lyric_curr, &font_title, 0);
-    lv_obj_set_style_text_color(label_lyric_curr, theme.accent_primary, 0);
-    lv_obj_set_style_text_align(label_lyric_curr, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(label_lyric_curr, 424);
-    lv_obj_set_pos(label_lyric_curr, 2, 40);
-    lv_label_set_long_mode(label_lyric_curr, LV_LABEL_LONG_SCROLL_CIRCULAR);
-
-    label_lyric_next = lv_label_create(lyric_box);
-    lv_label_set_text(label_lyric_next, "• [Next Lyric Line] •");
-    lv_obj_set_style_text_font(label_lyric_next, &font_sub, 0);
-    lv_obj_set_style_text_color(label_lyric_next, theme.text_dim, 0);
-    lv_obj_set_style_text_align(label_lyric_next, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(label_lyric_next, 424);
-    lv_obj_set_pos(label_lyric_next, 2, 82);
-    lv_label_set_long_mode(label_lyric_next, LV_LABEL_LONG_SCROLL_CIRCULAR);
-
-    // Progress Bar
-    bar_progress_lyric = lv_bar_create(page);
-    lv_obj_set_size(bar_progress_lyric, 440, 6);
-    lv_obj_set_pos(bar_progress_lyric, 20, 218);
-    lv_bar_set_range(bar_progress_lyric, 0, 100);
-    lv_bar_set_value(bar_progress_lyric, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(bar_progress_lyric, theme.bg_item, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(bar_progress_lyric, theme.accent_primary, LV_PART_INDICATOR);
-    lv_obj_set_style_radius(bar_progress_lyric, 3, 0);
-
-    // Elapsed / Total Time (below progress bar, at the edge right)
-    label_time_lyric = lv_label_create(page);
-    lv_label_set_text(label_time_lyric, "00:00 / 00:00");
-    lv_obj_set_style_text_font(label_time_lyric, &font_sub, 0);
-    lv_obj_set_style_text_color(label_time_lyric, theme.text_muted, 0);
-    lv_obj_set_style_text_align(label_time_lyric, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_width(label_time_lyric, 440);
-    lv_obj_set_pos(label_time_lyric, 20, 226);
-
-    // Album Art container (Bottom Left, shrunk)
-    lv_obj_t *art_box_lyric = lv_obj_create(page);
-    lv_obj_set_size(art_box_lyric, 70, 70);
-    lv_obj_set_pos(art_box_lyric, 20, 244);
-    lv_obj_set_style_bg_color(art_box_lyric, theme.bg_card, 0);
-    lv_obj_set_style_border_width(art_box_lyric, 1, 0);
-    lv_obj_set_style_border_color(art_box_lyric, theme.border_subtle, 0);
-    lv_obj_set_style_radius(art_box_lyric, 10, 0);
-    lv_obj_set_style_pad_all(art_box_lyric, 0, 0);
-    lv_obj_set_style_clip_corner(art_box_lyric, true, 0);
-    lv_obj_remove_flag(art_box_lyric, LV_OBJ_FLAG_SCROLLABLE);
-
-    art_lbl_lyric = lv_label_create(art_box_lyric);
-    lv_label_set_text(art_lbl_lyric, LV_SYMBOL_AUDIO);
-    lv_obj_set_style_text_align(art_lbl_lyric, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(art_lbl_lyric, theme.text_dim, 0);
-    lv_obj_center(art_lbl_lyric);
-
-    art_img_lyric = lv_image_create(art_box_lyric);
-    lv_obj_set_size(art_img_lyric, 70, 70);
-    lv_image_set_inner_align(art_img_lyric, LV_IMAGE_ALIGN_STRETCH);
-    lv_obj_center(art_img_lyric);
-    lv_obj_add_flag(art_img_lyric, LV_OBJ_FLAG_HIDDEN);
-
-    // Playback control buttons & Lyric toggle button (Bottom Mid, shrunk)
-    lv_obj_t *btn_prev_lyric = lv_button_create(page);
-    lv_obj_set_size(btn_prev_lyric, 44, 38);
-    lv_obj_set_pos(btn_prev_lyric, 175, 258);
-    lv_obj_set_style_bg_color(btn_prev_lyric, theme.bg_btn, 0);
-    lv_obj_set_style_radius(btn_prev_lyric, 19, 0);
-    lv_obj_add_style(btn_prev_lyric, &style_focus, LV_STATE_FOCUSED);
-    lv_obj_add_event_cb(btn_prev_lyric, btn_mpris_event_cb, LV_EVENT_CLICKED, (void *)"previous\n");
-
-    lv_obj_t *lbl_prev = lv_label_create(btn_prev_lyric);
-    lv_label_set_text(lbl_prev, LV_SYMBOL_PREV);
-    lv_obj_center(lbl_prev);
-
-    btn_play_lyric = lv_button_create(page);
-    lv_obj_set_size(btn_play_lyric, 52, 52);
-    lv_obj_set_pos(btn_play_lyric, 231, 251);
-    lv_obj_set_style_bg_color(btn_play_lyric, theme.accent_primary, 0);
-    lv_obj_set_style_radius(btn_play_lyric, 26, 0);
-    lv_obj_add_style(btn_play_lyric, &style_focus, LV_STATE_FOCUSED);
-    lv_obj_add_event_cb(btn_play_lyric, btn_mpris_event_cb, LV_EVENT_CLICKED, (void *)"pause:play\n");
-
-    label_play_icon_lyric = lv_label_create(btn_play_lyric);
-    lv_label_set_text(label_play_icon_lyric, LV_SYMBOL_PLAY);
-    lv_obj_set_style_text_color(label_play_icon_lyric, theme.text_inverse, 0);
-    lv_obj_center(label_play_icon_lyric);
-
-    lv_obj_t *btn_next_lyric = lv_button_create(page);
-    lv_obj_set_size(btn_next_lyric, 44, 38);
-    lv_obj_set_pos(btn_next_lyric, 295, 258);
-    lv_obj_set_style_bg_color(btn_next_lyric, theme.bg_btn, 0);
-    lv_obj_set_style_radius(btn_next_lyric, 19, 0);
-    lv_obj_add_style(btn_next_lyric, &style_focus, LV_STATE_FOCUSED);
-    lv_obj_add_event_cb(btn_next_lyric, btn_mpris_event_cb, LV_EVENT_CLICKED, (void *)"next\n");
-
-    lv_obj_t *lbl_next = lv_label_create(btn_next_lyric);
-    lv_label_set_text(lbl_next, LV_SYMBOL_NEXT);
-    lv_obj_center(lbl_next);
-
-    btn_lyric_toggle = lv_button_create(page);
-    lv_obj_set_size(btn_lyric_toggle, 44, 38);
-    lv_obj_set_pos(btn_lyric_toggle, 351, 258);
-    lv_obj_set_style_bg_color(btn_lyric_toggle, theme.bg_btn, 0);
-    lv_obj_set_style_radius(btn_lyric_toggle, 19, 0);
-    lv_obj_add_style(btn_lyric_toggle, &style_focus, LV_STATE_FOCUSED);
-    lv_obj_add_event_cb(btn_lyric_toggle, btn_lyric_toggle_cb, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *lbl_lyric = lv_label_create(btn_lyric_toggle);
-    lv_label_set_text(lbl_lyric, "♪");
-    lv_obj_set_style_text_font(lbl_lyric, &font_sub, 0);
-    lv_obj_set_style_text_color(lbl_lyric, theme.text_title, 0);
-    lv_obj_center(lbl_lyric);
-
-    // Auto-hiding navigation hint
-    hint_label_lyric = lv_label_create(page);
-    lv_label_set_text(hint_label_lyric, "PREV: <   OK: Select   NEXT: >");
-    lv_obj_set_style_text_font(hint_label_lyric, &font_sub, 0);
-    lv_obj_set_style_text_color(hint_label_lyric, theme.text_dim, 0);
-    lv_obj_set_align(hint_label_lyric, LV_ALIGN_BOTTOM_MID);
-    lv_obj_set_style_pad_bottom(hint_label_lyric, 2, 0);
-
-    // Add interactive elements to lyric group
-    lv_group_add_obj(lyric_group, btn_prev_lyric);
-    lv_group_add_obj(lyric_group, btn_play_lyric);
-    lv_group_add_obj(lyric_group, btn_next_lyric);
-    lv_group_add_obj(lyric_group, btn_lyric_toggle);
-    lv_group_add_obj(lyric_group, btn_menu_lyric);
-
-    lv_group_focus_obj(btn_play_lyric);
-
-    lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
+    apply_morph(0);
 }
 
 static void create_eq_page(lv_obj_t *parent) {
@@ -1397,7 +1274,6 @@ void render(void *pvParameters) {
     lv_obj_t *screen = lv_screen_active();
     lv_obj_set_style_bg_color(screen, theme.bg_screen, 0);
     create_music_page(screen);
-    create_lyrics_page(screen);
     create_eq_page(screen);
     switch_page(PAGE_MUSIC);
 
